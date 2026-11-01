@@ -15,5 +15,6 @@ else
   fetchgit {
     inherit (entry.git) url rev;
     fetchSubmodules = entry.git.submodules;
+    inherit (entry.git) leaveDotGit;
     inherit (entry) hash;
   }

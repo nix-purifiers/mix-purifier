@@ -6,8 +6,10 @@
 # - A Hex package is a file entry `{ path, url, mirrors, hash }`. Its hash
 #   is the outer checksum from mix.lock, which is the SHA-256 of the
 #   tarball. Each tarball has one URL, so `mirrors` is empty.
-# - A git dependency is a git entry `{ path, git = { url, rev, submodules },
-#   hash }`. Its hash comes from mix-purifier.lock.json.
+# - A git dependency is a git entry `{ path, git = { url, rev, submodules,
+#   leaveDotGit, commitObject }, hash }`, without a real .git, so
+#   `leaveDotGit` is false and `commitObject` is null. Its hash comes from
+#   mix-purifier.lock.json.
 #
 # Each entry keeps the mix.lock fields the dependency directory needs, under
 # `mix`.
@@ -59,8 +61,12 @@ let
     else
       {
         path = "git/${entry.key}";
+        # The dependency directory writes its own minimal .git (deps.nix),
+        # so the checkout needs no real one.
         git = {
           inherit (entry) url rev submodules;
+          leaveDotGit = false;
+          commitObject = null;
         };
         inherit (locked) hash;
         mix = entry;
