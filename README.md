@@ -27,7 +27,15 @@ which brings `mix.lock` up to date with `mix.exs`, and writes
 nix run github:nix-purifiers/mix-purifier -- lock
 ```
 
-Build the project with Nix through the flake's library:
+The flake's `overlays.default` adds `buildMixProject` to the package set,
+where nixpkgs keeps its own builders. A package written for `callPackage`
+takes it by name:
+
+```nix
+# package.nix
+{ buildMixProject }:
+(buildMixProject { src = ./.; }).packages.release-my_app
+```
 
 ```nix
 {
@@ -37,21 +45,25 @@ Build the project with Nix through the flake's library:
   outputs = { nixpkgs, mix-purifier, ... }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      project = mix-purifier.lib.mix-purifier.buildMixProject {
-        inherit pkgs;
-        src = ./.;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          mix-purifier.overlays.default
+          (final: prev: { my-app = final.callPackage ./package.nix { }; })
+        ];
       };
     in
     {
-      packages.${system}.default = project.packages.release-my_app;
-      checks.${system}.tests = project.tests;
+      packages.${system}.default = pkgs.my-app;
     };
 }
 ```
 
-`buildMixProject { pkgs, src, lockFile ? src + "/mix-purifier.lock.json",
-fetchers ? { }, ... }` returns, with every name known at evaluation time:
+`buildMixProject` takes the packages it needs by name, so
+`buildMixProject.override { beamPackages = pkgs.beam27Packages; }` builds
+with another Erlang and Elixir package set. It takes `{ src, lockFile ?
+src + "/mix-purifier.lock.json", fetchers ? { }, ... }` and returns, with
+every name known at evaluation time:
 
 - `packages.release-<name>`: the release that `mix release` builds. A
   release reads its cookie from `RELEASE_COOKIE`, because nixpkgs'
@@ -81,8 +93,6 @@ every download. The other arguments are these:
   path dependency outside its own directory.
 - `hexMirror` is the URL that serves hexpm's tarballs.
 - `docsMixEnv` is the Mix environment that has ex_doc, `dev` by default.
-- `beamPackages` is the Erlang and Elixir package set, nixpkgs'
-  `beamPackages` by default.
 - Every argument of nixpkgs' `mixRelease`, such as `mixEnv`, passes
   through.
 
@@ -105,7 +115,7 @@ to the library's `checkLock`, and `fetches` is its `entries`.
 Every command takes `--lockfile <path>` for a `mix-purifier.lock.json`
 kept outside the project.
 
-## Everyday loop
+## Development loop
 
 `mix-purifier prefetch` builds the dependency directory from the locks
 with Nix, copies each changed dependency into `deps/`, and keeps it and a
@@ -136,17 +146,17 @@ nix run github:nix-purifiers/mix-purifier -- prefetch
 When the toolchain's `mix` fails because it needs a dependency the locks
 do not have, it says to run `mix-purifier lock`.
 
-## Offline work
+## Working offline
 
 After `mix-purifier prefetch`, the toolchain's `mix` compiles and tests the
 project with no network: the dependencies are in `deps/`, the toolchain is
-in the Nix store under a garbage-collector root, and Mix only asks Hex for
-anything in `mix deps.get`.
+in the Nix store under a garbage-collector root, and Mix asks Hex only
+during `mix deps.get`.
 
 `mix-purifier lock --offline` rewrites the lockfile without the network,
 after an edit to `mix.exs` that does not change `mix.lock`. It reuses the
-recorded git hashes and repository URLs, and fails, naming the online lock
-run, when `mix.lock` has an entry it has not recorded.
+recorded git hashes and repository URLs, and stops with a message naming
+the online lock run when `mix.lock` has an entry it has not recorded.
 
 ## Editor
 
@@ -157,7 +167,7 @@ starts, so `mix-purifier prefetch` starts it once, with the network, to
 fetch them. Afterwards it starts with no network.
 `mix-purifier prefetch --no-editor` skips that step.
 
-## Errors and fixes
+## Troubleshooting
 
 Each of these stops a build, a command or the lock run with a message that
 names the command to run:
@@ -182,13 +192,13 @@ names the command to run:
   checksum is …, but mix.lock locks …".
 - **An edited outer checksum in `mix.lock`.** Nix fails the fetch with a
   hash mismatch that names the tarball, because a fixed-output fetch
-  cannot report more. Restore the file from version control, or run
+  reports only that. Restore the file from version control, or run
   `mix-purifier lock`.
 - **A `mix.lock` entry mix-purifier cannot read.** The build fails with the
   line it cannot read. Mix writes `mix.lock` one entry per line, and
   mix-purifier reads it that way.
 
-## Sources supported and refused
+## Supported language repositories
 
 Every kind of dependency that `mix.lock` can hold builds:
 
@@ -212,16 +222,15 @@ Every kind of dependency that `mix.lock` can hold builds:
 - **Path dependencies and umbrella projects.** `mix.lock` holds their own
   dependencies, and their sources are part of `src`.
 
-A package that downloads files while it compiles is refused by the
-sandbox, because the sandbox has no network and the download is in no
-lock. Packages that fetch precompiled NIFs are the common case, such as
-those built on rustler_precompiled. Such a package usually builds its NIF
-from source when told to, which the sandbox allows.
+The sandbox has no network, so a package that downloads files while it
+compiles needs those files in the lock. Packages that fetch precompiled
+NIFs are the common case, such as those built on rustler_precompiled. Such
+a package usually builds its NIF from source when told to, which the
+sandbox allows.
 
-`mix deps.get` resolves through Hex's registry even when `mix.lock` is
-complete, and the registry changes with every release, so it cannot be
-locked. mix-purifier therefore builds `deps/` itself instead of running
-`mix deps.get` offline.
+`mix deps.get` always resolves through Hex's registry, which changes with
+every release and cannot be locked. mix-purifier builds `deps/` itself from
+the locks, and Mix accepts it as fetched and locked.
 
 ## Examples
 
@@ -253,15 +262,25 @@ from its source and your lockfile:
   outputs = { nixpkgs, mix-purifier, credo, ... }:
     let
       system = "x86_64-linux";
-      project = mix-purifier.lib.mix-purifier.buildMixProject {
-        pkgs = nixpkgs.legacyPackages.${system};
-        src = credo;
-        lockFile = ./credo.mix-purifier.lock.json;
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          mix-purifier.overlays.default
+          (final: prev: {
+            credo-project = final.callPackage (
+              { buildMixProject }:
+              buildMixProject {
+                src = credo;
+                lockFile = ./credo.mix-purifier.lock.json;
+              }
+            ) { };
+          })
+        ];
       };
     in
     {
-      packages.${system}.default = project.packages.escript-credo;
-      checks.${system}.tests = project.tests;
+      packages.${system}.default = pkgs.credo-project.packages.escript-credo;
+      checks.${system}.tests = pkgs.credo-project.tests;
     };
 }
 ```

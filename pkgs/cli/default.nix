@@ -77,9 +77,11 @@ let
   publishExpression = builtins.toFile "mix-purifier-publish.nix" ''
     { projectDir, lockFile }:
     let
-      pkgs = ${importNixpkgs};
-      project = ${flakeLib}.mix-purifier.buildMixProject {
-        inherit pkgs;
+      pkgs = import ${path} {
+        config = { };
+        overlays = [ (builtins.getFlake "path:${../..}").overlays.default ];
+      };
+      project = pkgs.buildMixProject {
         lockFile = /. + lockFile;
         src = builtins.path {
           name = "source";

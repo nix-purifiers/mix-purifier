@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Reads mix-purifier.lock.json, the lock `mix-purifier lock` writes beside
-# mix.lock. It holds what mix.lock leaves out:
+# mix.lock. It holds what mix.lock does not record:
 #
 #   {
 #     "version": 1,
@@ -15,7 +15,7 @@
 #
 # - `hash` is the SHA-256 of the rest of the file, as compact JSON with
 #   sorted keys, which is the form `builtins.toJSON` writes. A file edited
-#   by hand no longer matches it.
+#   by hand has a different hash from the one it records.
 # - `outputs` has every output the project produces, as Mix reports it
 #   (nix/lock-info.exs describes the fields).
 # - `git` has the NAR hash of each git dependency's checkout. mix.lock pins

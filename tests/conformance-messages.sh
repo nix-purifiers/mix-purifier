@@ -34,9 +34,11 @@ expect_failure() {
   if output=$(nix eval --impure --json --expr "
       let
         flake = builtins.getFlake \"path:$root\";
-        pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
-        project = flake.lib.mix-purifier.buildMixProject {
-          inherit pkgs;
+        pkgs = import flake.inputs.nixpkgs {
+          system = builtins.currentSystem;
+          overlays = [ flake.overlays.default ];
+        };
+        project = pkgs.buildMixProject {
           src = $root/tests/fixtures/$fixture;
           lockFile = $work/$name.json;
         };

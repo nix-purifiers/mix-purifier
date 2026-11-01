@@ -8,7 +8,9 @@
   pkgs,
   cli,
   toolchain,
-  # The `mix-purifier` library namespace, with buildMixProject.
+  # The flake's default package overlay, which adds buildMixProject.
+  overlay,
+  # The `mix-purifier` library namespace, with readLock.
   mixPurifier,
   # The shared purifier library.
   purifier,
@@ -16,9 +18,11 @@
 let
   inherit (pkgs) lib;
 
-  # Every fixture builds the way a consumer builds: through the library's
-  # buildMixProject, given the package set.
-  build = args: mixPurifier.buildMixProject ({ inherit pkgs; } // args);
+  # Every fixture builds the way a consumer builds: through the
+  # buildMixProject that the overlay adds to the package set.
+  withOverlay = pkgs.extend overlay;
+  inherit (withOverlay) buildMixProject;
+  build = buildMixProject;
 
   relock = import ./relock.nix { inherit pkgs cli; };
   credo = import ./real-world/credo.nix {
@@ -242,6 +246,35 @@ let
       touch $out
     '';
 
+  # A package written for callPackage takes the builder by name, as a
+  # package in an overlay does, and builds what the builder builds.
+  consumerPackage =
+    let
+      withConsumer = withOverlay.extend (
+        final: prev: {
+          example = final.callPackage (
+            { buildMixProject }: (buildMixProject { src = ./fixtures/basic; }).packages.release-basic
+          ) { };
+        }
+      );
+    in
+    assert withConsumer.example.drvPath == basic.packages.release-basic.drvPath;
+    pkgs.runCommand "mix-purifier-test-consumer-package" { } "touch $out";
+
+  # `buildMixProject.override` replaces what the builder takes from the
+  # package set: a marker rebar3 in the Erlang and Elixir package set
+  # reaches the release.
+  builderOverride =
+    let
+      markerRebar3 = pkgs.runCommand "marker-rebar3" { } "mkdir -p $out/bin; touch $out/bin/rebar3";
+      overridden = buildMixProject.override {
+        beamPackages = pkgs.beamPackages.overrideScope (_: _: { rebar3 = markerRebar3; });
+      };
+      release = (overridden { src = ./fixtures/basic; }).packages.release-basic;
+    in
+    assert release.drvPath != basic.packages.release-basic.drvPath;
+    pkgs.runCommand "mix-purifier-test-builder-override" { } "touch $out";
+
   # Nix knows every output by name when it evaluates, from the lock alone.
   outputsKnown =
     assert
@@ -437,6 +470,8 @@ in
         lockFile = null;
       }).packages;
   tampered-inner-checksum = tamperedInnerChecksum;
+  consumer-package = consumerPackage;
+  builder-override = builderOverride;
   outputs-known = outputsKnown;
   reads-submodules = readsSubmodules;
   unit = import ./unit.nix { inherit pkgs; };

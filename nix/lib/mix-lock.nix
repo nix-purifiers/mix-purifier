@@ -15,8 +15,8 @@
 # is the SHA-256 of the tarball and `inner` the checksum of its contents.
 #
 # The result is { hex = [ … ]; git = [ … ]; unreadable = [ <line> ]; }.
-# readLock reports each unreadable line as a problem, so a lock this reader
-# does not understand never builds with a dependency left out.
+# readLock reports each unreadable line as a problem, so a build stops at a
+# lock this reader cannot read.
 { lib }:
 lockFile:
 let

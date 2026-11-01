@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: MIT
 #
-# The `mix-purifier` library namespace, with the two functions of the
-# purifier contract: `buildMixProject` (nix/lib/build-mix-project.nix), the
-# builder, and `readLock` (nix/lib/read-lock.nix), which reads a project's
-# locks into the lock in memory. Both use the purifier library, which this
-# flake lists in its `projects`, so `lib.purifier` is beside them.
+# The `mix-purifier` library namespace, with `readLock`
+# (nix/lib/read-lock.nix), which reads a project's locks into the lock in
+# memory of the purifier contract. The builder, `buildMixProject`
+# (nix/lib/build-mix-project.nix), is a package, which the default package
+# overlay adds to the package set.
 { ... }:
 {
 
   overlay = final: prev: {
     mix-purifier = (prev.mix-purifier or { }) // {
-      buildMixProject = import ../../nix/lib/build-mix-project.nix { lib = final; };
       readLock = import ../../nix/lib/read-lock.nix { lib = final; };
     };
   };

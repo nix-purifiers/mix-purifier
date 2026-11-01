@@ -54,10 +54,10 @@ let
   read = import ./purifier-lock.nix { inherit lib; } lockFile;
   purifierLock = read.lock;
 
-  # A private repository, such as a Hex organization, needs credentials
-  # that never enter Nix: `mix-purifier lock` downloads its tarballs with
-  # Hex and adds each to the store under the path this fetch produces, so
-  # the fetch finds it there.
+  # A private repository, such as a Hex organization, needs credentials.
+  # `mix-purifier lock` downloads its tarballs with Hex, using them, and
+  # adds each to the store under the path this fetch produces, so the
+  # fetch finds each tarball in the store.
   repoUrl =
     entry: if entry.repo == "hexpm" then hexMirror else purifierLock.hexRepos.${entry.repo} or null;
 

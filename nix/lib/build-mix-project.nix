@@ -1,13 +1,22 @@
 # SPDX-License-Identifier: MIT
 #
-# lib.mix-purifier.buildMixProject: builds a Mix project in the Nix sandbox
-# from mix.lock and mix-purifier.lock.json, with no generated Nix files in
-# the project. It meets the purifier contract (CONTRACT.md in
+# buildMixProject: builds a Mix project in the Nix sandbox from mix.lock and
+# mix-purifier.lock.json, with no generated Nix files in the project. It
+# meets the purifier contract (CONTRACT.md in
 # github:nix-purifiers/purifier).
 #
-#   lib.mix-purifier.buildMixProject { inherit pkgs; src = ./.; }
+# The file is a package for callPackage: the first argument set is what it
+# takes from the package set, and the result is the builder. The flake's
+# overlay (`overlays.default`) adds it to the package set as
+# `buildMixProject`, so a package written for callPackage takes it like any
+# other builder:
 #
-# The result has, each known when Nix evaluates, with no
+#   { buildMixProject }: (buildMixProject { src = ./.; }).packages.release-my_app
+#
+# and `buildMixProject.override` replaces what it takes from the set, such
+# as `beamPackages`, the Erlang and Elixir package set.
+#
+# The builder's result has, each known when Nix evaluates, with no
 # import-from-derivation:
 #
 # - `packages.<name>`: what the project builds. `release-<name>` is the
@@ -28,11 +37,11 @@
 #
 # The builder reads the locks with readLock and passes the result to the
 # purifier library's checkLock, so a lock with problems, such as a mix.exs
-# that changed since the lock was written, fails the evaluation with them,
-# rather than building outputs the lock no longer describes.
+# that changed since the lock was written, fails the evaluation with them.
 #
 # nixpkgs' mixRelease compiles each output, offline. Every argument
-# mixRelease takes passes through, such as `mixEnv`. Beyond those:
+# mixRelease takes passes through, such as `mixEnv`. The builder's own
+# arguments are these:
 #
 # - `fetchers` goes to the purifier library's fetchEntry, so a
 #   `fetchers.fetchurl` that sends credentials or uses a mirror reaches
@@ -47,24 +56,30 @@
 # - `hexMirror` is the mirror the hexpm tarballs come from.
 # - `docsMixEnv` is the Mix environment that has ex_doc, for
 #   `packages.docs`.
-# - `beamPackages` is the Erlang and Elixir package set, nixpkgs'
-#   `beamPackages` unless given.
 # - `pname` and `version` replace the name and version the lock records.
-{ lib }:
 {
-  pkgs,
+  lib,
+  stdenv,
+  callPackage,
+  beamPackages,
+  fetchurl,
+  fetchgit,
+  # The shared purifier library (github:nix-purifiers/purifier), which the
+  # overlay passes in.
+  purifier,
+}:
+{
   src,
-  fetchers ? { },
-  root ? ".",
   lockFile ?
     if builtins.pathExists (src + "/${root}/mix-purifier.lock.json") then
       src + "/${root}/mix-purifier.lock.json"
     else
       null,
+  fetchers ? { },
+  root ? ".",
   mixLock ? src + "/${root}/mix.lock",
   hexMirror ? "https://repo.hex.pm",
   docsMixEnv ? "dev",
-  beamPackages ? pkgs.beamPackages,
   ...
 }@args:
 let
@@ -80,7 +95,7 @@ let
       hexMirror
       ;
   };
-  checked = lib.purifier.checkLock lock;
+  checked = purifier.checkLock lock;
   outputs = checked.record;
 
   name =
@@ -100,14 +115,15 @@ let
         throw "mix-purifier: ${toString projectDir}/mix.exs sets no version. Give `version` to buildMixProject."
     );
 
-  deps = pkgs.callPackage ./deps.nix {
+  # Hex tarballs are file entries and git dependencies are git entries, so
+  # the fetchers the builder takes by name are the ones it needs.
+  deps = callPackage ./deps.nix {
     inherit beamPackages;
-    fetchEntry = lib.purifier.fetchEntry ({ inherit pkgs; } // fetchers);
-  } (lib.purifier.entriesFor pkgs.stdenv.hostPlatform.system checked);
+    fetchEntry = purifier.fetchEntry ({ inherit fetchurl fetchgit; } // fetchers);
+  } (purifier.entriesFor stdenv.hostPlatform.system checked);
 
   common =
     removeAttrs args [
-      "pkgs"
       "src"
       "fetchers"
       "root"
@@ -115,7 +131,6 @@ let
       "mixLock"
       "hexMirror"
       "docsMixEnv"
-      "beamPackages"
     ]
     // {
       inherit src version;

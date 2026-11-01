@@ -59,6 +59,7 @@
             checks = import ../../../tests {
               inherit pkgs;
               inherit (self.packages.${system}) cli toolchain;
+              overlay = self.overlays.default;
               mixPurifier = self.lib.mix-purifier;
               inherit (self.lib) purifier;
             };
