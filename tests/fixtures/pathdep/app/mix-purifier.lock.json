@@ -1,0 +1,21 @@
+{
+  "outputs": {
+    "app": "pathdep_app",
+    "apps": {
+      "pathdep_app": {
+        "path": ".",
+        "version": "0.4.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "a6ee26e247ae199359e0b20dcaf3930216b9d0317a60bfbf7fc924172e482888"
+    },
+    "escripts": [],
+    "package": null,
+    "releases": [
+      "pathdep_app"
+    ],
+    "version": "0.4.0"
+  },
+  "version": 1
+}

@@ -2,5 +2,23 @@
   "hexRepos": {
     "mirror": "https://repo.hex.pm"
   },
+  "outputs": {
+    "app": "hexrepo",
+    "apps": {
+      "hexrepo": {
+        "path": ".",
+        "version": "0.5.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "4d32c9bcba99648a90eed1b60771c7f2bf5bb544059edf5c77f43de41a300ab5"
+    },
+    "escripts": [],
+    "package": null,
+    "releases": [
+      "hexrepo"
+    ],
+    "version": "0.5.0"
+  },
   "version": 1
 }

@@ -1,0 +1,23 @@
+{
+  "outputs": {
+    "app": "basic",
+    "apps": {
+      "basic": {
+        "path": ".",
+        "version": "0.1.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "8d572b66d92174931522a1a41369ed21f4e223923c67932edf949aa220db06c4"
+    },
+    "escripts": [
+      "basic"
+    ],
+    "package": null,
+    "releases": [
+      "basic"
+    ],
+    "version": "0.1.0"
+  },
+  "version": 1
+}

@@ -1,30 +1,40 @@
 # SPDX-License-Identifier: MIT
 #
-# buildMixProject: builds a Mix project in the Nix sandbox from its
-# mix.lock, with no generated Nix files in the project.
+# buildMixProject: builds a Mix project in the Nix sandbox from mix.lock and
+# mix-purifier.lock.json, with no generated Nix files in the project.
 #
 #   buildMixProject { src = ./.; }
 #
-# The dependencies come from the locks (nix/lib/deps.nix), and nixpkgs'
-# mixRelease compiles the project and builds its release, offline. Every
-# argument mixRelease takes passes through, such as `mixEnv`,
-# `mixReleaseName` and `escriptBinName`. Beyond those:
+# mix-purifier.lock.json records every output the project produces, as Mix
+# reported it to `mix-purifier lock`, so Nix knows each one by name when it
+# evaluates:
+#
+# - `releases.<name>`: the release `mix release <name>` builds.
+# - `apps.<name>`: the compiled application, with its ebin and priv
+#   directories, for each of the project's own applications.
+# - `escripts.<name>`: the escript `mix escript.build` builds, in bin/.
+# - `hexPackage`: the package tarball `mix hex.build` builds, as
+#   `package.tar`, or null for a project with no package metadata.
+# - `docs`: the HTML documentation `mix docs` builds.
+# - `deps`: the dependency directory (nix/lib/deps.nix).
+# - `outputs`: the record of the outputs, as the lock holds it.
+#
+# The result itself is the first release, or the compiled applications for
+# a project without a release. A mix.exs that changed since the lock was
+# written fails the evaluation, rather than building outputs the lock no
+# longer describes.
+#
+# nixpkgs' mixRelease compiles each output, offline. Every argument
+# mixRelease takes passes through, such as `mixEnv`. Beyond those:
 #
 # - `root` is the directory of mix.exs inside `src`. A project with a path
 #   dependency outside its own directory takes a `src` that holds both, and
 #   names its own directory as `root`.
-# - `pname` and `version` default to the application name and version in
-#   mix.exs (nix/lib/mix-project.nix). An umbrella root has no application,
-#   so an umbrella project gives both.
 # - `lockFile` is mix.lock, and `purifierLockFile` is
-#   mix-purifier.lock.json when the project has one.
+#   mix-purifier.lock.json.
 # - `hexMirror` is the mirror the hexpm tarballs come from.
 # - `docsMixEnv` is the Mix environment that has ex_doc, for `docs`.
-#
-# The result is the release. Beside it, `hexPackage` is the package tarball
-# `mix hex.build` makes, `docs` is the HTML documentation `mix docs` makes,
-# and `deps` is the dependency directory. `mix-purifier publish` publishes
-# `hexPackage` and `docs`.
+# - `pname` and `version` replace the name and version the lock records.
 #
 # The Erlang and Elixir versions are those of `beamPackages`, so
 # `buildMixProject.override { beamPackages = beam27Packages; }` builds with
@@ -45,25 +55,49 @@
       null,
   hexMirror ? "https://repo.hex.pm",
   docsMixEnv ? "dev",
-  pname ? null,
-  version ? null,
   passthru ? { },
   ...
 }@args:
 let
-  project = import ./mix-project.nix { inherit lib; } (src + "/${root}/mix.exs");
+  projectDir = src + "/${root}";
+  purifierLock = import ./purifier-lock.nix { inherit lib; } purifierLockFile;
+
+  recorded =
+    if purifierLock.outputs == null then
+      throw "mix-purifier: ${toString projectDir} has no mix-purifier.lock.json with the project's outputs. Run `mix-purifier lock`."
+    else
+      purifierLock.outputs;
+  changed = lib.attrNames (
+    lib.filterAttrs (
+      file: hash: builtins.hashFile "sha256" (projectDir + "/${file}") != hash
+    ) recorded.definitionFiles
+  );
+  outputs =
+    if changed != [ ] then
+      throw "mix-purifier: ${lib.concatStringsSep ", " changed} changed since mix-purifier.lock.json was written. Run `mix-purifier lock`."
+    else
+      recorded;
+
+  name =
+    args.pname or (
+      if outputs.app != null then
+        outputs.app
+      else if outputs.releases != [ ] then
+        builtins.head outputs.releases
+      else
+        baseNameOf (toString projectDir)
+    );
+  version =
+    args.version or (
+      if outputs.version != null then
+        outputs.version
+      else
+        throw "mix-purifier: ${toString projectDir}/mix.exs sets no version. Give `version` to buildMixProject."
+    );
+
   deps = callPackage ./deps.nix { inherit beamPackages; } {
     inherit lockFile purifierLockFile hexMirror;
   };
-  orFromMixExs =
-    field: given: found:
-    if given != null then
-      given
-    else if found != null then
-      found
-    else
-      throw "mix-purifier: cannot read the ${field} from ${toString src}/${root}/mix.exs. Give `${field}` to buildMixProject.";
-  name = orFromMixExs "pname" pname project.app;
 
   common =
     removeAttrs args [
@@ -76,7 +110,7 @@ let
     ]
     // {
       pname = name;
-      version = orFromMixExs "version" version project.version;
+      inherit version;
       mixFodDeps = deps;
     }
     // lib.optionalAttrs (root != ".") {
@@ -86,7 +120,7 @@ let
       '';
     };
 
-  # A derivation of the project that installs something other than the
+  # A derivation of the project that installs something other than a
   # release, so the release fixups do not apply.
   artifact =
     suffix: extra:
@@ -100,14 +134,52 @@ let
       // extra
     );
 
-  hexPackage = artifact "hex-package" {
+  # `mix release` builds a project's only release, configured or the
+  # implicit one named after the application, and `mix release <name>`
+  # accepts only a configured name, so the name is given only to choose
+  # among several.
+  releases = lib.genAttrs outputs.releases (
+    release:
+    beamPackages.mixRelease (
+      common
+      // {
+        pname = release;
+        mixReleaseName = if lib.length outputs.releases > 1 then release else "";
+      }
+    )
+  );
+
+  compiled = artifact "apps" {
     installPhase = ''
       runHook preInstall
       mkdir -p "$out"
-      mix hex.build --output "$out/package.tar"
+      for app in ${lib.escapeShellArgs (lib.attrNames outputs.apps)}; do
+        cp -rL "_build/$MIX_BUILD_PREFIX/lib/$app" "$out/$app"
+      done
       runHook postInstall
     '';
   };
+  apps = lib.mapAttrs (app: _: "${compiled}/${app}") outputs.apps;
+
+  escripts = lib.genAttrs outputs.escripts (
+    escript:
+    artifact "escript-${escript}" {
+      escriptBinName = escript;
+    }
+  );
+
+  hexPackage =
+    if outputs.package == null then
+      null
+    else
+      artifact "hex-package" {
+        installPhase = ''
+          runHook preInstall
+          mkdir -p "$out"
+          mix hex.build --output "$out/package.tar"
+          runHook postInstall
+        '';
+      };
 
   docs = artifact "docs" {
     mixEnv = docsMixEnv;
@@ -117,12 +189,22 @@ let
       runHook postInstall
     '';
   };
+
+  default = if outputs.releases != [ ] then releases.${builtins.head outputs.releases} else compiled;
 in
-beamPackages.mixRelease (
-  common
-  // {
-    passthru = passthru // {
-      inherit deps hexPackage docs;
+default.overrideAttrs (previous: {
+  passthru =
+    (previous.passthru or { })
+    // passthru
+    // {
+      inherit
+        releases
+        apps
+        escripts
+        hexPackage
+        docs
+        deps
+        outputs
+        ;
     };
-  }
-)
+})

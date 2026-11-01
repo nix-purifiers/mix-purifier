@@ -8,7 +8,8 @@
 #   mix.lock (`deps.get`, `deps.update`, `deps.unlock`) run online instead.
 #   With MIX_PURIFIER_DEPS naming a dependency directory Nix already built,
 #   such as buildMixProject's `deps`, it copies that one instead.
-# - `mix-purifier lock` writes mix-purifier.lock.json: the hash of each git
+# - `mix-purifier lock` writes mix-purifier.lock.json: the project's outputs
+#   as Mix reports them (nix/project-outputs.exs), the hash of each git
 #   dependency's checkout, and the URL of each Hex repository other than
 #   hexpm. It downloads the tarballs of those repositories with Hex and adds
 #   them to the Nix store, so a build needs no Hex credentials.
@@ -175,7 +176,7 @@ writeShellApplication {
 
     lock() {
       require_lock
-      local entries git_entries repo_entries git_locked='{}' hex_repos='{}'
+      local entries git_entries repo_entries outputs git_locked='{}' hex_repos='{}'
       entries=$(nix-instantiate --eval --strict --json \
         --argstr lockFile "$PWD/mix.lock" ${mixLockExpression})
       git_entries=$(jq '.git' <<<"$entries")
@@ -186,13 +187,11 @@ writeShellApplication {
       if [ "$(jq length <<<"$repo_entries")" != 0 ]; then
         hex_repos=$(lock_hex_repos "$repo_entries")
       fi
-      if [ "$git_locked" = '{}' ] && [ "$hex_repos" = '{}' ]; then
-        rm -f mix-purifier.lock.json
-        echo "mix-purifier: mix.lock has no git dependency and uses only hexpm, so the project needs no mix-purifier.lock.json."
-        return
-      fi
-      jq --sort-keys -n --argjson git "$git_locked" --argjson hexRepos "$hex_repos" \
-        '{version: 1} + (if $git == {} then {} else {git: $git} end) + (if $hexRepos == {} then {} else {hexRepos: $hexRepos} end)' \
+      # The builds use MIX_ENV=prod, so the outputs are those of prod.
+      outputs=$(MIX_ENV=prod elixir ${nixLib}/project-outputs.exs)
+      jq --sort-keys -n --argjson outputs "$outputs" \
+        --argjson git "$git_locked" --argjson hexRepos "$hex_repos" \
+        '{version: 1, outputs: $outputs} + (if $git == {} then {} else {git: $git} end) + (if $hexRepos == {} then {} else {hexRepos: $hexRepos} end)' \
         > mix-purifier.lock.json
       echo "mix-purifier: wrote mix-purifier.lock.json"
     }

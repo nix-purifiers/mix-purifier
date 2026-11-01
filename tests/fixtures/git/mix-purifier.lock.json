@@ -7,5 +7,23 @@
       "url": "https://github.com/ericmj/decimal.git"
     }
   },
+  "outputs": {
+    "app": "git_dep",
+    "apps": {
+      "git_dep": {
+        "path": ".",
+        "version": "0.2.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "92a531db37c6b9db4f0f2455dd6eb181c978be874c90e5a8c1ab7af2eae61e6e"
+    },
+    "escripts": [],
+    "package": null,
+    "releases": [
+      "git_dep"
+    ],
+    "version": "0.2.0"
+  },
   "version": 1
 }

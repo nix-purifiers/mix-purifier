@@ -4,12 +4,14 @@ A Nix library and command that build a Mix project in the Nix sandbox from
 its `mix.lock`, with no generated Nix files in the project.
 
 - **Builds from mix.lock.** `mix.lock` records the SHA-256 of every Hex
-  tarball, so Nix fetches each package straight from the lock. A project
-  that uses only hexpm packages needs nothing beyond its `mix.lock`.
+  tarball, so Nix fetches each package straight from the lock.
 - **A lockfile for what mix.lock leaves out.** `mix-purifier lock` writes
-  `mix-purifier.lock.json` when a project needs it: the hash of each git
+  `mix-purifier.lock.json`. It records every output the project produces,
+  as Mix reports it: the releases, the project's own applications, the
+  escript and the Hex package. It also records the hash of each git
   dependency's checkout, and the URL of each Hex repository other than
-  hexpm.
+  hexpm. `mix.exs` is Elixir code, and Nix reads only JSON and TOML, so
+  this file is how Nix knows each output by name.
 - **Sandboxed builds.** `buildMixProject`, which the flake's overlay adds to
   a package set, builds the project's `deps/` directory from the locks and
   hands it to nixpkgs' `mixRelease`, which compiles the project and builds
@@ -37,8 +39,10 @@ and `deps.unlock`) run online, as usual:
 nix run github:nix-purifiers/mix-purifier -- mix deps.get
 ```
 
-After `mix.lock` changes, run the lock run, and commit
-`mix-purifier.lock.json` beside `mix.lock` if it writes one:
+Run the lock run once, and again after `mix.exs` or `mix.lock` changes.
+Commit `mix-purifier.lock.json` beside `mix.lock`. A build fails with a
+message to run it when a `mix.exs` no longer matches the hash the lock
+recorded:
 
 ```zsh
 nix run github:nix-purifiers/mix-purifier -- lock
@@ -76,9 +80,27 @@ buildMixProject { src = ./.; }
 }
 ```
 
-`nix build` builds the project's release. The release reads its cookie
-from `RELEASE_COOKIE`, because nixpkgs' `mixRelease` keeps the cookie out
-of the store.
+`nix build` builds the project's first release, or its compiled
+applications if it has no release. A release reads its cookie from
+`RELEASE_COOKIE`, because nixpkgs' `mixRelease` keeps the cookie out of
+the store.
+
+### Outputs
+
+Every output the lock records is an attribute of the result, which Nix
+knows without building anything:
+
+- `releases.<name>` is the release that `mix release` builds.
+- `apps.<name>` is the compiled application, with its `ebin` and `priv`
+  directories, for each of the project's own applications. An umbrella
+  project has one per child application.
+- `escripts.<name>` is the escript that `mix escript.build` builds, in
+  `bin/`.
+- `hexPackage` is the package tarball that `mix hex.build` builds, as
+  `package.tar`. It is null for a project without package metadata.
+- `docs` is the HTML documentation that `mix docs` builds.
+- `deps` is the dependency directory, and `outputs` is the record of the
+  outputs as the lock holds it.
 
 ### Arguments
 
@@ -88,19 +110,13 @@ of the store.
 - `root` is the directory of `mix.exs` inside `src`. A project with a path
   dependency outside its own directory gives a `src` that holds both, and
   names its own directory as `root`.
-- `pname` and `version` default to the application name and version in
-  `mix.exs`. An umbrella root has no application, so an umbrella project
-  gives `pname`, and gives `version` unless its root `mix.exs` sets one.
-- `lockFile` is `mix.lock`. `purifierLockFile` is `mix-purifier.lock.json`
-  when the project has one.
+- `pname` and `version` replace the name and version that the lock
+  records. An umbrella root without a version gives `version`.
+- `lockFile` is `mix.lock`, and `purifierLockFile` is
+  `mix-purifier.lock.json`.
 - `hexMirror` is the URL that serves hexpm's tarballs.
 - `docsMixEnv` is the Mix environment that has ex_doc. It defaults to
   `dev`.
-
-The result is the release. Beside it, `hexPackage` holds the package
-tarball that `mix hex.build` makes, as `package.tar`. `docs` holds the HTML
-documentation that `mix docs` makes, and `deps` is the dependency
-directory.
 
 The Erlang and Elixir versions are those of the package set's
 `beamPackages`, so `buildMixProject.override { beamPackages =

@@ -1,0 +1,24 @@
+{
+  "outputs": {
+    "app": "mix_purifier_publish_fixture",
+    "apps": {
+      "mix_purifier_publish_fixture": {
+        "path": ".",
+        "version": "0.6.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "70a02120873b24ab28c7fb6f6b3fe7aa0ac887bc7af93d7c7179bf2b5e9afdcd"
+    },
+    "escripts": [],
+    "package": {
+      "name": "mix_purifier_publish_fixture",
+      "version": "0.6.0"
+    },
+    "releases": [
+      "mix_purifier_publish_fixture"
+    ],
+    "version": "0.6.0"
+  },
+  "version": 1
+}

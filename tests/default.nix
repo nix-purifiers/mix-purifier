@@ -16,7 +16,7 @@ let
   inherit (pkgs) lib;
 
   # Hex packages only: jason, an Elixir package, and telemetry, an Erlang
-  # package that rebar3 builds. mix.exs gives the version as @version.
+  # package that rebar3 builds. The project has a release and an escript.
   basic = buildMixProject { src = ./fixtures/basic; };
 
   # A git dependency (decimal, locked in mix-purifier.lock.json) beside a
@@ -24,12 +24,8 @@ let
   git = buildMixProject { src = ./fixtures/git; };
 
   # An umbrella of two applications, one depending on the other with
-  # `in_umbrella`, and a release of both. The root has no application, so
-  # the name is given.
-  umbrella = buildMixProject {
-    src = ./fixtures/umbrella;
-    pname = "umbrella";
-  };
+  # `in_umbrella`, and a release of both.
+  umbrella = buildMixProject { src = ./fixtures/umbrella; };
 
   # A path dependency beside the project (`path: "../helper"`), with a Hex
   # dependency of its own that the project's mix.lock locks.
@@ -207,22 +203,47 @@ let
     assert (import ../nix/lib/fetch.nix { inherit (pkgs) fetchurl fetchgit; } entry).fetchSubmodules;
     pkgs.runCommand "mix-purifier-test-reads-submodules" { } "touch $out";
 
-  readsMixExs =
-    let
-      read = import ../nix/lib/mix-project.nix { inherit lib; };
-    in
+  # Nix knows every output by name when it evaluates, from the lock alone:
+  # the releases, the project's own applications, the escripts and the Hex
+  # package.
+  outputsKnown =
+    assert lib.attrNames basic.releases == [ "basic" ];
+    assert lib.attrNames basic.escripts == [ "basic" ];
+    assert basic.hexPackage == null;
+    assert lib.attrNames umbrella.releases == [ "umbrella" ];
     assert
-      read ./fixtures/basic/mix.exs == {
-        app = "basic";
-        version = "0.1.0";
-      };
-    assert
-      read ./fixtures/git/mix.exs == {
-        app = "git_dep";
-        version = "0.2.0";
-      };
-    assert (read ./fixtures/umbrella/mix.exs).app == null;
-    pkgs.runCommand "mix-purifier-test-reads-mix-exs" { } "touch $out";
+      lib.attrNames umbrella.apps == [
+        "greeter"
+        "shouter"
+      ];
+    assert umbrella.pname == "umbrella";
+    assert publishable.hexPackage != null;
+    assert publishable.outputs.package.name == "mix_purifier_publish_fixture";
+    pkgs.runCommand "mix-purifier-test-outputs-known" { } "touch $out";
+
+  # The escript runs.
+  basicEscript = pkgs.runCommand "mix-purifier-test-basic-escript" { } ''
+    out_text=$(${basic.escripts.basic}/bin/basic nix)
+    test "$out_text" = '{"event":"nix"}'
+    touch $out
+  '';
+
+  # Each of the umbrella's applications is compiled on its own.
+  umbrellaApps = pkgs.runCommand "mix-purifier-test-umbrella-apps" { } ''
+    test -f ${umbrella.apps.greeter}/ebin/greeter.app
+    test -f ${umbrella.apps.shouter}/ebin/shouter.app
+    touch $out
+  '';
+
+  # A mix.exs that changed since the lock fails the evaluation, and so does
+  # a project with no lock of its outputs.
+  staleMixExsLock = builtins.toFile "mix-purifier.lock.json" (
+    builtins.toJSON (
+      lib.recursiveUpdate (lib.importJSON ./fixtures/basic/mix-purifier.lock.json) {
+        outputs.definitionFiles."mix.exs" = lib.fakeSha256;
+      }
+    )
+  );
 
   # The command runs, and its usage names every subcommand.
   command = pkgs.runCommand "mix-purifier-test-command" { } ''
@@ -272,6 +293,20 @@ in
     lockFile = unreadableMixLock;
   });
   reads-submodules = readsSubmodules;
-  reads-mix-exs = readsMixExs;
+  outputs-known = outputsKnown;
+  basic-escript = basicEscript;
+  umbrella-apps = umbrellaApps;
+  stale-mix-exs =
+    fails "stale-mix-exs"
+      (buildMixProject {
+        src = ./fixtures/basic;
+        purifierLockFile = staleMixExsLock;
+      }).outputs;
+  missing-outputs =
+    fails "missing-outputs"
+      (buildMixProject {
+        src = ./fixtures/basic;
+        purifierLockFile = null;
+      }).outputs;
   inherit command;
 }
