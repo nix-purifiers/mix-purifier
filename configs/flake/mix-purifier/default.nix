@@ -19,9 +19,9 @@
     # The `mix-purifier` scope is the `default` entry of the package overlay
     # registry (pkg-overlays/): the package set applies it by default, and
     # the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`. The `packages` output lists the packages of the
-    # scope below, because the scope also holds the builder, which is a
-    # function.
+    # `overlays.default`. Caisson's own export of the scope stays off,
+    # because the scope also holds the builder, which is a function. The
+    # `packages` output below lists the derivations of the scope instead.
   };
 
   # `nix run github:nix-purifiers/mix-purifier -- lock` locks the project in
@@ -30,8 +30,7 @@
   perSystem =
     { pkgs, ... }:
     {
-      packages = {
-        inherit (pkgs.mix-purifier) cli toolchain;
+      packages = lib.filterAttrs (_: lib.isDerivation) pkgs.mix-purifier // {
         default = pkgs.mix-purifier.cli;
       };
     };
