@@ -203,9 +203,8 @@ Every kind of dependency that `mix.lock` can hold builds:
   same path a build's fetch produces, so the build needs no credentials.
   Another machine, such as CI, needs the tarball too: from a binary cache,
   or from its own lock run.
-- **Private Hex organizations** take the same path, with the URL that Hex
-  resolves for the organization. They are untested, because a test needs
-  organization credentials.
+- **Private Hex organizations** take the same path, with the URL and the
+  credentials that Hex has for the organization.
 - **Git dependencies**, with `submodules: true`, `sparse:` and `subdir:`.
   Each is fetched with nixpkgs' `fetchgit` at the locked commit, and gets a
   minimal `.git` whose `HEAD` names the commit and whose config names the
@@ -226,32 +225,49 @@ locked. mix-purifier therefore builds `deps/` itself instead of running
 
 ## Examples
 
-CI locks and builds a real project as an example of mix-purifier at work:
-**[credo](https://github.com/rrrene/credo) v1.7.19** (commit `d4a88d49`),
-the Elixir static analysis tool. It has an escript, a Hex package, and
-dependencies for prod, dev and test, and its lockfile is kept outside its
-source, in `tests/real-world/credo`. The checks rerun its lock run, build
-its release, escript, application and Hex package, run the escript on
-credo's own source, and run its test suite in the sandbox. Its own
-`mix docs` fails at this commit, with or without mix-purifier, because its
-`mix.exs` gives ex_doc an `assets` string that the ex_doc in its `mix.lock`
-rejects.
+### credo
 
-With the published flake, the first lock run on credo took 3.8 seconds
-from an empty Hex home. The dependencies and credo compiled offline in 17
-seconds. An upgrade of jason from 1.4.4 to 1.4.5 relocked in 1.4 seconds,
-and the tests passed again on the new jason.
+[credo](https://github.com/rrrene/credo) is the static analysis tool for
+Elixir. To package it without touching its source, keep the lockfile beside
+your own flake. In a checkout of the release you want, run the lock run and
+write the lockfile outside the project:
 
-`nix flake check` builds the test suite, which CI runs on x86_64-linux and
-aarch64-linux. It includes the `conformance-*` checks of the contract,
-unit tests of the lock readers (`tests/unit.nix`), a fixture for every
-source kind, the offline lock run on every fixture, which must reproduce
-the committed lockfile byte for byte, the negative tests above, publishing
-to a stand-in Hex API, and credo. CI also checks the message of each
-failing lockfile (`tests/conformance-messages.sh`), runs
-`nix build --rebuild` on a fixture, runs the online lock run on every
-fixture (`tests/relock-online.sh`), and runs `mix-purifier update` on a
-fixture that pins an old version (`tests/conformance-update.sh`).
+```zsh
+git clone --branch v1.7.19 https://github.com/rrrene/credo
+cd credo
+nix run github:nix-purifiers/mix-purifier -- lock --lockfile ../credo.mix-purifier.lock.json
+```
+
+Commit `credo.mix-purifier.lock.json` next to a flake that builds credo
+from its source and your lockfile:
+
+```nix
+{
+  inputs.mix-purifier.url = "github:nix-purifiers/mix-purifier";
+  inputs.nixpkgs.follows = "mix-purifier/nixpkgs";
+  inputs.credo = {
+    url = "github:rrrene/credo/v1.7.19";
+    flake = false;
+  };
+
+  outputs = { nixpkgs, mix-purifier, credo, ... }:
+    let
+      system = "x86_64-linux";
+      project = mix-purifier.lib.mix-purifier.buildMixProject {
+        pkgs = nixpkgs.legacyPackages.${system};
+        src = credo;
+        lockFile = ./credo.mix-purifier.lock.json;
+      };
+    in
+    {
+      packages.${system}.default = project.packages.escript-credo;
+      checks.${system}.tests = project.tests;
+    };
+}
+```
+
+`nix build` puts credo at `result/bin/credo`, and `nix flake check` runs its
+test suite.
 
 ## Credits
 
