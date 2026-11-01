@@ -224,23 +224,22 @@ complete, and the registry changes with every release, so it cannot be
 locked. mix-purifier therefore builds `deps/` itself instead of running
 `mix deps.get` offline.
 
-## Real-world projects
+## Examples
 
-- **[credo](https://github.com/rrrene/credo) v1.7.19** (commit
-  `d4a88d49`), the Elixir static analysis tool: 257 source files, an
-  escript, a Hex package, and dependencies for prod, dev and test. Its
-  lockfile is kept outside its source, in `tests/real-world/credo`. The
-  checks rerun its lock run, build its release, escript, application and
-  Hex package, run the escript on credo's own source, and run its test
-  suite (1740 tests and 21 doctests) in the sandbox. credo's own
-  `mix docs` fails at this commit, with or without mix-purifier, because
-  its `mix.exs` gives ex_doc an `assets` string that the ex_doc in its
-  `mix.lock` rejects.
+CI locks and builds a real project as an example of mix-purifier at work:
+**[credo](https://github.com/rrrene/credo) v1.7.19** (commit `d4a88d49`),
+the Elixir static analysis tool. It has an escript, a Hex package, and
+dependencies for prod, dev and test, and its lockfile is kept outside its
+source, in `tests/real-world/credo`. The checks rerun its lock run, build
+its release, escript, application and Hex package, run the escript on
+credo's own source, and run its test suite in the sandbox. Its own
+`mix docs` fails at this commit, with or without mix-purifier, because its
+`mix.exs` gives ex_doc an `assets` string that the ex_doc in its `mix.lock`
+rejects.
 
-On credo, with the published flake, the first lock run took 3.8 seconds
-from an empty Hex home and wrote the lockfile the checks hold. The
-dependencies and credo compiled offline in 17 seconds and its tests
-passed. An upgrade of jason from 1.4.4 to 1.4.5 relocked in 1.4 seconds,
+With the published flake, the first lock run on credo took 3.8 seconds
+from an empty Hex home. The dependencies and credo compiled offline in 17
+seconds. An upgrade of jason from 1.4.4 to 1.4.5 relocked in 1.4 seconds,
 and the tests passed again on the new jason.
 
 `nix flake check` builds the test suite, which CI runs on x86_64-linux and
@@ -250,8 +249,9 @@ source kind, the offline lock run on every fixture, which must reproduce
 the committed lockfile byte for byte, the negative tests above, publishing
 to a stand-in Hex API, and credo. CI also checks the message of each
 failing lockfile (`tests/conformance-messages.sh`), runs
-`nix build --rebuild` on a fixture, and runs the online lock run on every
-fixture (`tests/relock-online.sh`).
+`nix build --rebuild` on a fixture, runs the online lock run on every
+fixture (`tests/relock-online.sh`), and runs `mix-purifier update` on a
+fixture that pins an old version (`tests/conformance-update.sh`).
 
 ## Credits
 
