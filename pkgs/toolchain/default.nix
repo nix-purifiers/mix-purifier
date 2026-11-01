@@ -22,6 +22,15 @@ let
   '';
   mix = writeShellScriptBin "mix" ''
     ${environment}
+    dir="$PWD"
+    while [ ! -e "$dir/mix-purifier.lock.json" ] && [ "$dir" != / ]; do
+      dir=$(dirname "$dir")
+    done
+    lock="''${MIX_PURIFIER_LOCKFILE:-$dir/mix-purifier.lock.json}"
+    if [ ! -e "$lock" ]; then
+      echo "mix-purifier: warning: no mix-purifier.lock.json found; running mix impurely. Run \`mix-purifier lock\` to use Nix-resolved dependencies." >&2
+      exec ${beamPackages.elixir}/bin/mix "$@"
+    fi
     export HEX_OFFLINE=1
     status=0
     ${beamPackages.elixir}/bin/mix "$@" || status=$?

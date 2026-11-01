@@ -1,8 +1,11 @@
 # mix-purifier
 
-A Nix library and command that build a Mix project in the Nix sandbox from
-its `mix.lock`, with no generated Nix files in the project. It meets the
-[purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
+mix-purifier keeps Mix's development workflow on locked,
+Nix-resolved dependencies. Use the normal build and test commands in your
+working tree; building the project itself in the Nix sandbox is an
+optional next step.
+
+It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
 `mix.lock` records the SHA-256 of every Hex tarball, so Nix fetches each
 package straight from it. `mix-purifier lock` writes
@@ -17,39 +20,84 @@ package straight from it. `mix-purifier lock` writes
 - the URL of each Hex repository other than hexpm, which lives in the
   user's Hex configuration rather than in the project.
 
+## Installation
+
+Install the integration into your Nix profile once:
+
+```sh
+nix profile install 'github:nix-purifiers/mix-purifier' 'github:nix-purifiers/mix-purifier#toolchain'
+```
+
+This installs the purifier CLI. The workflow below prepares the native
+tool's cache, hook or environment; follow that activation step before using
+your usual commands. The ordinary tool itself remains your normal
+installation unless the setup explicitly supplies a toolchain.
+
+`nix shell` makes an integration available temporarily instead of installing
+it. Keep using the activation steps below where a project environment or
+prefetched cache is required.
+
 ## Quickstart
 
-In the directory of `mix.exs`, run the lock run. It runs `mix deps.get`,
-which brings `mix.lock` up to date with `mix.exs`, and writes
-`mix-purifier.lock.json`. Commit both files:
+Install Nix, then run the following from your existing project's root.
+The setup prepares the locked dependencies and the integration that
+Mix's normal commands use:
 
 ```zsh
 nix run github:nix-purifiers/mix-purifier -- lock
+nix run github:nix-purifiers/mix-purifier -- prefetch
+export PATH="$PWD/_build/mix-purifier/toolchain/bin:$PATH"
+mix compile
+mix test
 ```
 
-Then build the project from the same directory. The overlay
-`overlays.default` adds one attribute to the package set, the scope
-`mix-purifier`, which holds the builder `buildMixProject`, the
-`mix-purifier` command (`cli`) and the Erlang and Elixir toolchain:
+Commit the lockfiles that the lock command writes, including the build
+tool's own lockfile when it has one. Keep using the project's usual build,
+test and editor commands with this setup. Nix provides the locked
+dependencies; the development commands above run outside the Nix sandbox.
+No project Nix files are needed for this workflow.
+
+Sandboxed builds of the whole project are an optional
+[next step](#building-the-project-with-nix).
+
+## Development loop
+
+`mix-purifier prefetch` builds the dependency directory from the locks
+with Nix, copies each changed dependency into `deps/`, and keeps it and a
+toolchain alive under `_build/mix-purifier`. The toolchain's `mix` runs
+with Hex offline, so the everyday loop goes through Mix itself:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app'
+nix run github:nix-purifiers/mix-purifier -- prefetch
+_build/mix-purifier/toolchain/bin/mix compile
+_build/mix-purifier/toolchain/bin/mix test
 ```
 
-This uses the purifier's pinned nixpkgs, matching the lock command above.
-To build with ambient `<nixpkgs>` from your Nix search path instead,
-replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
-Both forms need no Nix files in your project. The build tool and language
-versions must match the lockfile; with ambient nixpkgs, lock with the
-purifier from that package set or pass a compatible toolchain to the builder.
+With `_build/mix-purifier/toolchain/bin` first on `PATH`, such as with
+direnv's `PATH_add`, plain `mix` is that toolchain.
+
+To upgrade dependencies, run `mix-purifier update`, which updates them
+through Mix's own `mix deps.update` (every one, or the ones named) and
+then runs the lock run on the result. `mix-purifier lock` keeps `mix.lock`
+as Mix resolved it, adding only what `mix.exs` asks for and `mix.lock`
+lacks, so after an edit to `mix.exs` the lock run is enough. Run the
+prefetch again after either:
+
+```zsh
+nix run github:nix-purifiers/mix-purifier -- update jason
+nix run github:nix-purifiers/mix-purifier -- prefetch
+```
+
+When the toolchain's `mix` fails because it needs a dependency the locks
+do not have, it says to run `mix-purifier lock`.
+
+## Building the project with Nix
+
+Once the native development workflow is working, you can also build and
+test the whole project in the Nix sandbox. For this step, keep a flake or
+another Nix build definition in the project's repository, or maintain an
+external packaging repository that points at its sources and lockfiles.
+The builder consumes the same lockfiles as the development workflow.
 
 A project whose authors want a flake that packages it can add one, which
 calls the builder directly. The flake can live in the project's repository
@@ -142,36 +190,29 @@ project's copy as it is, and `lock` starts from the project's copy when the
 outside file does not exist yet. The builder takes the same two files as
 `lockFile` and `mixLock`.
 
-## Development loop
+### One-off builds without a project Nix file
 
-`mix-purifier prefetch` builds the dependency directory from the locks
-with Nix, copies each changed dependency into `deps/`, and keeps it and a
-toolchain alive under `_build/mix-purifier`. The toolchain's `mix` runs
-with Hex offline, so the everyday loop goes through Mix itself:
+For an ad hoc build, the builder can also be evaluated directly from the
+project root. Replace the example package name with one from your project:
 
 ```zsh
-nix run github:nix-purifiers/mix-purifier -- prefetch
-_build/mix-purifier/toolchain/bin/mix compile
-_build/mix-purifier/toolchain/bin/mix test
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app'
 ```
 
-With `_build/mix-purifier/toolchain/bin` first on `PATH`, such as with
-direnv's `PATH_add`, plain `mix` is that toolchain.
-
-To upgrade dependencies, run `mix-purifier update`, which updates them
-through Mix's own `mix deps.update` (every one, or the ones named) and
-then runs the lock run on the result. `mix-purifier lock` keeps `mix.lock`
-as Mix resolved it, adding only what `mix.exs` asks for and `mix.lock`
-lacks, so after an edit to `mix.exs` the lock run is enough. Run the
-prefetch again after either:
-
-```zsh
-nix run github:nix-purifiers/mix-purifier -- update jason
-nix run github:nix-purifiers/mix-purifier -- prefetch
-```
-
-When the toolchain's `mix` fails because it needs a dependency the locks
-do not have, it says to run `mix-purifier lock`.
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
 
 ## Working offline
 
@@ -260,6 +301,11 @@ every release and cannot be locked. mix-purifier builds `deps/` itself from
 the locks, and Mix accepts it as fetched and locked.
 
 ## Examples
+
+For day-to-day work on these projects, use the native-tool setup and
+commands in [Quickstart](#quickstart) and [Development loop](#development-loop).
+The Nix expressions below show optional sandboxed packaging of those
+projects.
 
 ### credo
 
