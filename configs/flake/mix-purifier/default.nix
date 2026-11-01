@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-{ ... }:
+{ closure-lib, ... }:
 {
   config,
   inputs,
@@ -8,7 +8,13 @@
 }:
 {
 
-  imports = [ inputs.flake-parts.flakeModules.partitions ];
+  imports = [
+    inputs.flake-parts.flakeModules.partitions
+    closure-lib.caisson.modules.flake."purifier/purifier-packages"
+  ];
+
+  # The flake's `packages` output is the derivations of this scope.
+  purifier.scope = "mix-purifier";
 
   debug = false;
   caisson = {
@@ -19,9 +25,7 @@
     # The `mix-purifier` scope is the `default` entry of the package overlay
     # registry (pkg-overlays/): the package set applies it by default, and
     # the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`. Caisson's own export of the scope stays off,
-    # because the scope also holds the builder, which is a function. The
-    # `packages` output below lists the derivations of the scope instead.
+    # `overlays.default`.
   };
 
   # `nix run github:nix-purifiers/mix-purifier -- lock` locks the project in
@@ -30,9 +34,7 @@
   perSystem =
     { pkgs, ... }:
     {
-      packages = lib.filterAttrs (_: lib.isDerivation) pkgs.mix-purifier // {
-        default = pkgs.mix-purifier.cli;
-      };
+      packages.default = pkgs.mix-purifier.cli;
     };
 
   partitionedAttrs.checks = "checks";
