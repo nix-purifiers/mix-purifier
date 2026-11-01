@@ -8,7 +8,7 @@
   pkgs,
   cli,
   toolchain,
-  # The flake's default package overlay, which adds buildMixProject.
+  # The flake's default package overlay, which adds the mix-purifier scope.
   overlay,
   # The `mix-purifier` library namespace, with readLock.
   mixPurifier,
@@ -19,9 +19,10 @@ let
   inherit (pkgs) lib;
 
   # Every fixture builds the way a consumer builds: through the
-  # buildMixProject that the overlay adds to the package set.
+  # buildMixProject that the overlay adds to the package set, in the
+  # mix-purifier scope.
   withOverlay = pkgs.extend overlay;
-  inherit (withOverlay) buildMixProject;
+  inherit (withOverlay.mix-purifier) buildMixProject;
   build = buildMixProject;
 
   relock = import ./relock.nix { inherit pkgs cli; };
@@ -70,6 +71,23 @@ let
       filter = file: _: baseNameOf file != "mix-purifier.lock.json";
     };
     lockFile = ./fixtures/basic/mix-purifier.lock.json;
+  };
+
+  # The same fixture without its mix.lock either, built from a mix.lock that
+  # the flake keeps outside the source.
+  externalMixLock = build {
+    src = builtins.path {
+      name = "basic-without-lockfiles";
+      path = ./fixtures/basic;
+      filter =
+        file: _:
+        !(builtins.elem (baseNameOf file) [
+          "mix-purifier.lock.json"
+          "mix.lock"
+        ]);
+    };
+    lockFile = ./fixtures/basic/mix-purifier.lock.json;
+    mixLock = ./fixtures/basic/mix.lock;
   };
 
   beam = {
@@ -246,20 +264,37 @@ let
       touch $out
     '';
 
-  # A package written for callPackage takes the builder by name, as a
-  # package in an overlay does, and builds what the builder builds.
+  # A package written for callPackage takes the scope by name, as a package
+  # in an overlay does, and builds what the builder builds.
   consumerPackage =
     let
       withConsumer = withOverlay.extend (
         final: prev: {
           example = final.callPackage (
-            { buildMixProject }: (buildMixProject { src = ./fixtures/basic; }).packages.release-basic
+            { mix-purifier }:
+            (mix-purifier.buildMixProject { src = ./fixtures/basic; }).packages.release-basic
           ) { };
         }
       );
     in
     assert withConsumer.example.drvPath == basic.packages.release-basic.drvPath;
     pkgs.runCommand "mix-purifier-test-consumer-package" { } "touch $out";
+
+  # `mix-purifier.overrideScope` replaces what the whole scope shares: a
+  # marker rebar3 in the Erlang and Elixir package set reaches the release
+  # through the scope.
+  scopeOverride =
+    let
+      markerRebar3 = pkgs.runCommand "marker-rebar3" { } "mkdir -p $out/bin; touch $out/bin/rebar3";
+      overridden = withOverlay.mix-purifier.overrideScope (
+        _: _: {
+          beamPackages = pkgs.beamPackages.overrideScope (_: _: { rebar3 = markerRebar3; });
+        }
+      );
+      release = (overridden.buildMixProject { src = ./fixtures/basic; }).packages.release-basic;
+    in
+    assert release.drvPath != basic.packages.release-basic.drvPath;
+    pkgs.runCommand "mix-purifier-test-scope-override" { } "touch $out";
 
   # `buildMixProject.override` replaces what the builder takes from the
   # package set: a marker rebar3 in the Erlang and Elixir package set
@@ -398,9 +433,44 @@ in
   };
   conformance-rebuild = rebuild;
   conformance-offline = offline;
+  # Builds the fixture from a purifier lockfile kept outside its source, and
+  # from that lockfile together with a mix.lock kept outside it.
   conformance-external =
-    runs "external" external.packages.release-basic ''IO.puts(Basic.event_json("nix"))''
-      ''{"event":"nix"}'';
+    let
+      expression = ''IO.puts(Basic.event_json("nix"))'';
+      expected = ''{"event":"nix"}'';
+    in
+    pkgs.runCommand "mix-purifier-test-conformance-external" { } ''
+      : ${runs "external" external.packages.release-basic expression expected}
+      : ${runs "external-mix-lock" externalMixLock.packages.release-basic expression expected}
+      touch $out
+    '';
+
+  # The commands keep a mix.lock outside the project: `lock` writes it there
+  # and leaves the project's own copy, or its absence, as it was, and starts
+  # from the project's copy when the outside one does not exist yet.
+  tool-lockfile = pkgs.runCommand "mix-purifier-test-tool-lockfile" beam ''
+    export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
+    mkdir outside
+
+    cp -r ${./fixtures/basic} without-lock
+    chmod -R u+w without-lock
+    rm without-lock/mix.lock without-lock/mix-purifier.lock.json
+    cp ${./fixtures/basic/mix.lock} outside/mix.lock
+    (cd without-lock && ${cli}/bin/mix-purifier lock --offline \
+      --tool-lockfile ../outside/mix.lock --lockfile ../outside/mix-purifier.lock.json)
+    test ! -e without-lock/mix.lock
+    cmp outside/mix.lock ${./fixtures/basic/mix.lock}
+    cmp outside/mix-purifier.lock.json ${./fixtures/basic/mix-purifier.lock.json}
+
+    cp -r ${./fixtures/basic} with-lock
+    chmod -R u+w with-lock
+    rm -f outside/mix.lock
+    (cd with-lock && MIX_PURIFIER_TOOL_LOCKFILE=../outside/mix.lock ${cli}/bin/mix-purifier lock --offline)
+    cmp with-lock/mix.lock ${./fixtures/basic/mix.lock}
+    cmp outside/mix.lock ${./fixtures/basic/mix.lock}
+    touch $out
+  '';
 
   basic-release = basic.packages.release-basic;
   basic-runs =
@@ -471,6 +541,7 @@ in
       }).packages;
   tampered-inner-checksum = tamperedInnerChecksum;
   consumer-package = consumerPackage;
+  scope-override = scopeOverride;
   builder-override = builderOverride;
   outputs-known = outputsKnown;
   reads-submodules = readsSubmodules;

@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
 #
-# The `mix-purifier` command, with the three commands of the purifier
-# contract. Each takes `--lockfile <path>` for a mix-purifier.lock.json kept
-# outside the project; the default is the one beside mix.lock.
+# The `mix-purifier` command, with the commands of the purifier contract.
+# Each takes `--lockfile <path>` (or MIX_PURIFIER_LOCKFILE) for a
+# mix-purifier.lock.json kept outside the project, and `--tool-lockfile
+# <path>` (or MIX_PURIFIER_TOOL_LOCKFILE) for a mix.lock kept outside it.
+# The defaults are the files beside mix.exs.
 #
 # - `mix-purifier lock` runs `mix deps.get`, which brings mix.lock up to
 #   date with mix.exs, then writes mix-purifier.lock.json: the project's
@@ -81,7 +83,7 @@ let
         config = { };
         overlays = [ (builtins.getFlake "path:${../..}").overlays.default ];
       };
-      project = pkgs.buildMixProject {
+      project = pkgs.mix-purifier.buildMixProject {
         lockFile = /. + lockFile;
         src = builtins.path {
           name = "source";
@@ -120,14 +122,18 @@ writeShellApplication {
     mix-purifier ${version}
 
     Usage:
-      mix-purifier lock [--offline] [--lockfile PATH]
+      mix-purifier lock [--offline]
           Resolve mix.lock and write mix-purifier.lock.json
-      mix-purifier update [PACKAGE...] [--lockfile PATH]
+      mix-purifier update [PACKAGE...]
           Update the dependencies with mix deps.update, then lock
-      mix-purifier prefetch [--no-editor] [--lockfile PATH]
+      mix-purifier prefetch [--no-editor]
           Make the everyday loop and the editor work with no network
-      mix-purifier publish [--organization ORG] [--replace] [--yes] [--no-docs] [--lockfile PATH]
+      mix-purifier publish [--organization ORG] [--replace] [--yes] [--no-docs]
           Publish the package and docs that Nix builds
+
+    Every command takes --lockfile PATH (or MIX_PURIFIER_LOCKFILE) for a
+    mix-purifier.lock.json kept outside the project, and --tool-lockfile PATH
+    (or MIX_PURIFIER_TOOL_LOCKFILE) for a mix.lock kept outside it.
 
     Run them in the directory of mix.exs. After `mix-purifier prefetch`, run
     Mix as _build/mix-purifier/toolchain/bin/mix, or put that directory first
@@ -138,11 +144,60 @@ writeShellApplication {
     export ERL_LIBS=${beamPackages.hex}/lib/erlang/lib''${ERL_LIBS:+:$ERL_LIBS}
     export MIX_REBAR3=${beamPackages.rebar3}/bin/rebar3
 
-    lockfile=$PWD/mix-purifier.lock.json
+    lockfile=$(realpath -m "''${MIX_PURIFIER_LOCKFILE:-$PWD/mix-purifier.lock.json}")
+    tool_lockfile=''${MIX_PURIFIER_TOOL_LOCKFILE:+$(realpath -m "$MIX_PURIFIER_TOOL_LOCKFILE")}
 
     fail() {
       echo "mix-purifier: $1" >&2
       exit 1
+    }
+
+    # A mix.lock kept outside the project. While a command runs, the file
+    # named by --tool-lockfile or MIX_PURIFIER_TOOL_LOCKFILE is the project's
+    # mix.lock, so Mix and the Nix expressions read it there. When the
+    # command ends, the project's own mix.lock is back as it was, or absent
+    # if the project had none. A command that writes mix.lock, `lock` and
+    # `update`, saves the result to the outside path first, and starts from
+    # the project's copy when the outside file does not exist yet.
+    saved_tree_lock=""
+    tree_lock_existed=false
+
+    use_tool_lockfile() {
+      [ -n "$tool_lockfile" ] || return 0
+      if [ "$tool_lockfile" = "$PWD/mix.lock" ]; then
+        tool_lockfile=""
+        return 0
+      fi
+      saved_tree_lock=$(mktemp)
+      if [ -e mix.lock ]; then
+        cp -p mix.lock "$saved_tree_lock"
+        tree_lock_existed=true
+      fi
+      trap restore_tree_lock EXIT
+      # install replaces the file, so a read-only copy, such as one from the
+      # Nix store, becomes a file that Mix can write.
+      if [ -e "$tool_lockfile" ]; then
+        install -m 644 "$tool_lockfile" mix.lock
+      fi
+    }
+
+    restore_tree_lock() {
+      [ -n "$saved_tree_lock" ] || return 0
+      if [ "$tree_lock_existed" = true ]; then
+        install -m 644 "$saved_tree_lock" mix.lock
+        chmod --reference="$saved_tree_lock" mix.lock
+      else
+        rm -f mix.lock
+      fi
+      rm -f "$saved_tree_lock"
+      saved_tree_lock=""
+    }
+
+    save_tool_lockfile() {
+      [ -n "$tool_lockfile" ] || return 0
+      mkdir -p "$(dirname "$tool_lockfile")"
+      install -m 644 mix.lock "$tool_lockfile"
+      echo "mix-purifier: wrote $tool_lockfile" >&2
     }
 
     require_mix_lock() {
@@ -352,6 +407,7 @@ writeShellApplication {
     while [ $# -gt 0 ]; do
       case "$command:$1" in
         *:--lockfile) lockfile=$(realpath -m "$2"); shift ;;
+        *:--tool-lockfile) tool_lockfile=$(realpath -m "$2"); shift ;;
         update:-*) usage >&2; exit 2 ;;
         update:*) packages+=("$1") ;;
         lock:--offline) offline=true ;;
@@ -365,8 +421,18 @@ writeShellApplication {
     done
 
     case "$command" in
-      lock) lock "$offline" ;;
-      update) update "''${packages[@]}" ;;
+      lock | update | prefetch | publish) use_tool_lockfile ;;
+    esac
+
+    case "$command" in
+      lock)
+        lock "$offline"
+        save_tool_lockfile
+        ;;
+      update)
+        update "''${packages[@]}"
+        save_tool_lockfile
+        ;;
       prefetch) prefetch "$editor" ;;
       publish) publish "$docs" "''${hex_args[@]}" ;;
       -h | --help | help | "") usage ;;

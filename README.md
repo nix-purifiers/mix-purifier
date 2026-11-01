@@ -27,14 +27,15 @@ which brings `mix.lock` up to date with `mix.exs`, and writes
 nix run github:nix-purifiers/mix-purifier -- lock
 ```
 
-The flake's `overlays.default` adds `buildMixProject` to the package set,
-where nixpkgs keeps its own builders. A package written for `callPackage`
-takes it by name:
+The flake's `overlays.default` adds one attribute to the package set, the
+scope `mix-purifier`. The scope holds the builder `buildMixProject`, the
+`mix-purifier` command (`cli`) and the Erlang and Elixir toolchain. A
+package written for `callPackage` takes the scope by name:
 
 ```nix
 # package.nix
-{ buildMixProject }:
-(buildMixProject { src = ./.; }).packages.release-my_app
+{ mix-purifier }:
+(mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app
 ```
 
 ```nix
@@ -60,8 +61,10 @@ takes it by name:
 ```
 
 `buildMixProject` takes the packages it needs by name, so
-`buildMixProject.override { beamPackages = pkgs.beam27Packages; }` builds
-with another Erlang and Elixir package set. It takes `{ src, lockFile ?
+`mix-purifier.buildMixProject.override { beamPackages = pkgs.beam27Packages; }`
+builds one project with another Erlang and Elixir package set, and
+`mix-purifier.overrideScope (_: _: { beamPackages = pkgs.beam27Packages; })`
+replaces it for everything in the scope. It takes `{ src, lockFile ?
 src + "/mix-purifier.lock.json", fetchers ? { }, ... }` and returns, with
 every name known at evaluation time:
 
@@ -112,8 +115,17 @@ does, and `problems` holds a message, naming the fix, for each lockfile
 that is stale, tampered, malformed or incomplete. The builder passes it
 to the library's `checkLock`, and `fetches` is its `entries`.
 
-Every command takes `--lockfile <path>` for a `mix-purifier.lock.json`
-kept outside the project.
+Committing both lockfiles to the project's repository is the recommended
+setup, and the commands and the builder look for them there. A project can
+instead keep its build external, with the lockfiles in the flake that calls
+the builder. Every command then takes `--lockfile <path>` (or the
+environment variable `MIX_PURIFIER_LOCKFILE`) for a `mix-purifier.lock.json`
+kept outside the project, and `--tool-lockfile <path>` (or
+`MIX_PURIFIER_TOOL_LOCKFILE`) for a `mix.lock` kept outside it. With
+`--tool-lockfile`, `lock` and `update` write `mix.lock` there and leave the
+project's copy as it is, and `lock` starts from the project's copy when the
+outside file does not exist yet. The builder takes the same two files as
+`lockFile` and `mixLock`.
 
 ## Development loop
 
@@ -268,8 +280,8 @@ from its source and your lockfile:
           mix-purifier.overlays.default
           (final: prev: {
             credo-project = final.callPackage (
-              { buildMixProject }:
-              buildMixProject {
+              { mix-purifier }:
+              mix-purifier.buildMixProject {
                 src = credo;
                 lockFile = ./credo.mix-purifier.lock.json;
               }

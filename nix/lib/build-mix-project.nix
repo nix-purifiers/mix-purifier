@@ -7,14 +7,14 @@
 #
 # The file is a package for callPackage: the first argument set is what it
 # takes from the package set, and the result is the builder. The flake's
-# overlay (`overlays.default`) adds it to the package set as
-# `buildMixProject`, so a package written for callPackage takes it like any
-# other builder:
+# overlay (`overlays.default`) adds it to the package set in the scope
+# `mix-purifier`, so a package written for callPackage takes the scope:
 #
-#   { buildMixProject }: (buildMixProject { src = ./.; }).packages.release-my_app
+#   { mix-purifier }: (mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app
 #
-# and `buildMixProject.override` replaces what it takes from the set, such
-# as `beamPackages`, the Erlang and Elixir package set.
+# `buildMixProject.override` replaces what it takes from the set, such as
+# `beamPackages`, the Erlang and Elixir package set, and
+# `mix-purifier.overrideScope` replaces what the whole scope shares.
 #
 # The builder's result has, each known when Nix evaluates, with no
 # import-from-derivation:
@@ -52,7 +52,8 @@
 # - `lockFile` is mix-purifier.lock.json, and `mixLock` is mix.lock. Each
 #   defaults to the file in the project's directory, and a file given
 #   outside `src` replaces any copy in it, so a packaging flake can build a
-#   project whose author keeps no mix-purifier.lock.json.
+#   project whose author keeps no mix-purifier.lock.json, or keeps no
+#   mix.lock.
 # - `hexMirror` is the mirror the hexpm tarballs come from.
 # - `docsMixEnv` is the Mix environment that has ex_doc, for
 #   `packages.docs`.
@@ -64,6 +65,13 @@
   beamPackages,
   fetchurl,
   fetchgit,
+  # What the purifier library's fetchEntry takes by name for its steps that
+  # run commands.
+  runCommand,
+  unzip,
+  zstd,
+  python3,
+  writeText,
   # The shared purifier library (github:nix-purifiers/purifier), which the
   # overlay passes in.
   purifier,
@@ -115,11 +123,22 @@ let
         throw "mix-purifier: ${toString projectDir}/mix.exs sets no version. Give `version` to buildMixProject."
     );
 
-  # Hex tarballs are file entries and git dependencies are git entries, so
-  # the fetchers the builder takes by name are the ones it needs.
   deps = callPackage ./deps.nix {
     inherit beamPackages;
-    fetchEntry = purifier.fetchEntry ({ inherit fetchurl fetchgit; } // fetchers);
+    fetchEntry = purifier.fetchEntry (
+      {
+        inherit
+          fetchurl
+          fetchgit
+          runCommand
+          unzip
+          zstd
+          python3
+          writeText
+          ;
+      }
+      // fetchers
+    );
   } (purifier.entriesFor stdenv.hostPlatform.system checked);
 
   common =

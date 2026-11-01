@@ -38,7 +38,7 @@ expect_failure() {
           system = builtins.currentSystem;
           overlays = [ flake.overlays.default ];
         };
-        project = pkgs.buildMixProject {
+        project = pkgs.mix-purifier.buildMixProject {
           src = $root/tests/fixtures/$fixture;
           lockFile = $work/$name.json;
         };

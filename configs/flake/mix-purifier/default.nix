@@ -16,22 +16,24 @@
       inherit (libOverlays) default;
     };
 
-    # The packages are the `default` entry of this flake's package overlay
+    # The `mix-purifier` scope is the `default` entry of the package overlay
     # registry (pkg-overlays/): the package set applies it by default, and
     # the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`.
-    nixpkgs = {
-      packages.export.enabled = true;
-    };
+    # `overlays.default`. The `packages` output lists the packages of the
+    # scope below, because the scope also holds the builder, which is a
+    # function.
   };
 
   # `nix run github:nix-purifiers/mix-purifier -- lock` locks the project in
   # the current directory, `… -- prefetch` readies it for work with no
   # network, and `… -- publish` publishes what Nix built.
   perSystem =
-    { config, ... }:
+    { pkgs, ... }:
     {
-      packages.default = config.packages.cli;
+      packages = {
+        inherit (pkgs.mix-purifier) cli toolchain;
+        default = pkgs.mix-purifier.cli;
+      };
     };
 
   partitionedAttrs.checks = "checks";
