@@ -27,16 +27,33 @@ which brings `mix.lock` up to date with `mix.exs`, and writes
 nix run github:nix-purifiers/mix-purifier -- lock
 ```
 
-The flake's `overlays.default` adds one attribute to the package set, the
-scope `mix-purifier`. The scope holds the builder `buildMixProject`, the
-`mix-purifier` command (`cli`) and the Erlang and Elixir toolchain. A
-package written for `callPackage` takes the scope by name:
+Then build the project from the same directory. The overlay
+`overlays.default` adds one attribute to the package set, the scope
+`mix-purifier`, which holds the builder `buildMixProject`, the
+`mix-purifier` command (`cli`) and the Erlang and Elixir toolchain:
 
-```nix
-# package.nix
-{ mix-purifier }:
-(mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app'
 ```
+
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
+
+A project whose authors want a flake that packages it can add one, which
+calls the builder directly. The flake can live in the project's repository
+or in another one:
 
 ```nix
 {
@@ -48,14 +65,12 @@ package written for `callPackage` takes the scope by name:
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [
-          mix-purifier.overlays.default
-          (final: prev: { my-app = final.callPackage ./package.nix { }; })
-        ];
+        overlays = [ mix-purifier.overlays.default ];
       };
     in
     {
-      packages.${system}.default = pkgs.my-app;
+      packages.${system}.default =
+        (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app;
     };
 }
 ```
@@ -249,56 +264,29 @@ the locks, and Mix accepts it as fetched and locked.
 ### credo
 
 [credo](https://github.com/rrrene/credo) is the static analysis tool for
-Elixir. To package it without touching its source, keep the lockfile beside
-your own flake. In a checkout of the release you want, run the lock run and
-write the lockfile outside the project:
+Elixir. Clone the release you want, run the lock run in the checkout, and
+build the escript from the same directory:
 
 ```zsh
 git clone --branch v1.7.19 https://github.com/rrrene/credo
 cd credo
-nix run github:nix-purifiers/mix-purifier -- lock --lockfile ../credo.mix-purifier.lock.json
-```
-
-Commit `credo.mix-purifier.lock.json` next to a flake that builds credo
-from its source and your lockfile:
-
-```nix
-{
-  inputs.mix-purifier.url = "github:nix-purifiers/mix-purifier";
-  inputs.nixpkgs.follows = "mix-purifier/nixpkgs";
-  inputs.credo = {
-    url = "github:rrrene/credo/v1.7.19";
-    flake = false;
-  };
-
-  outputs = { nixpkgs, mix-purifier, credo, ... }:
-    let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [
-          mix-purifier.overlays.default
-          (final: prev: {
-            credo-project = final.callPackage (
-              { mix-purifier }:
-              mix-purifier.buildMixProject {
-                src = credo;
-                lockFile = ./credo.mix-purifier.lock.json;
-              }
-            ) { };
-          })
-        ];
-      };
-    in
-    {
-      packages.${system}.default = pkgs.credo-project.packages.escript-credo;
-      checks.${system}.tests = pkgs.credo-project.tests;
+nix run github:nix-purifiers/mix-purifier -- lock
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
     };
-}
+  in
+  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.escript-credo'
 ```
 
-`nix build` puts credo at `result/bin/credo`, and `nix flake check` runs its
-test suite.
+`nix build` puts credo at `result/bin/credo`. To package credo without
+touching its source, run the lock run with the lockfile written outside the
+checkout, with `--lockfile ../credo.mix-purifier.lock.json`, and pass that
+file to the builder as `lockFile` in a flake of your own that takes credo
+as a non-flake input.
 
 ## Credits
 
