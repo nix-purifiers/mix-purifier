@@ -1,111 +1,72 @@
 # SPDX-License-Identifier: MIT
 #
 # The flake's checks. Every one builds in the sandbox; the only network
-# access is the fixed-output fetches of locked downloads.
+# access is the fixed-output fetches of locked downloads. The `conformance-*`
+# checks are those of the purifier contract (CONTRACT.md in
+# github:nix-purifiers/purifier).
 {
   pkgs,
-  # The flake's default package overlay, which adds buildMixProject.
-  overlay,
   cli,
+  toolchain,
+  # The `mix-purifier` library namespace, with buildMixProject.
+  mixPurifier,
   # The shared purifier library.
   purifier,
 }:
 let
-  # Every fixture builds the way a consumer's package does: through
-  # buildMixProject of a package set the overlay applies to.
-  withOverlay = pkgs.extend overlay;
-  inherit (withOverlay) buildMixProject;
   inherit (pkgs) lib;
+
+  # Every fixture builds the way a consumer builds: through the library's
+  # buildMixProject, given the package set.
+  build = args: mixPurifier.buildMixProject ({ inherit pkgs; } // args);
 
   relock = import ./relock.nix { inherit pkgs cli; };
   credo = import ./real-world/credo.nix {
     inherit
       pkgs
-      buildMixProject
+      build
       cli
       relock
       ;
   };
 
-  # The lock run reproduces each fixture's committed lockfile, byte for
-  # byte.
-  relockChecks = lib.listToAttrs (
-    map
-      (
-        {
-          name,
-          root ? ".",
-        }:
-        lib.nameValuePair "${name}-relock" (
-          relock.reproduces {
-            inherit name root;
-            src = ./fixtures + "/${name}";
-            lockFile = ./fixtures + "/${name}/${root}/mix-purifier.lock.json";
-          }
-        )
-      )
-      [
-        { name = "basic"; }
-        { name = "git"; }
-        { name = "umbrella"; }
-        {
-          name = "pathdep";
-          root = "app";
-        }
-        { name = "hexrepo"; }
-        { name = "publish"; }
-      ]
-  );
-
-  # A mix.lock whose inner checksum for jason was edited: the tarball still
-  # matches its outer checksum, so it downloads, and unpacking it fails
-  # with a message that names the checksum mix.lock locks.
-  tamperedInnerChecksum =
-    let
-      tampered = builtins.toFile "mix.lock" (
-        builtins.replaceStrings
-          [ "2e3a008590b0b8d7388c20293e9dcc9cf3e5d642fd2a114e4cbbb52e595d940a" ]
-          [ "0000000000000000000000000000000000000000000000000000000000000000" ]
-          (builtins.readFile ./fixtures/basic/mix.lock)
-      );
-      failure =
-        pkgs.testers.testBuildFailure
-          (buildMixProject {
-            src = ./fixtures/basic;
-            lockFile = tampered;
-          }).deps.hexPackages.jason;
-    in
-    pkgs.runCommand "mix-purifier-test-tampered-inner-checksum" { } ''
-      grep -q 'the inner checksum is 2e3a0085.*but mix.lock locks 00000000' ${failure}/testBuildFailure.log
-      touch $out
-    '';
-
   # Hex packages only: jason, an Elixir package, and telemetry, an Erlang
   # package that rebar3 builds. The project has a release and an escript.
-  basic = buildMixProject { src = ./fixtures/basic; };
+  basic = build { src = ./fixtures/basic; };
 
   # A git dependency (decimal, locked in mix-purifier.lock.json) beside a
-  # Hex package (jason).
-  git = buildMixProject { src = ./fixtures/git; };
+  # Hex package (jason), and an ExUnit test.
+  git = build { src = ./fixtures/git; };
 
   # An umbrella of two applications, one depending on the other with
   # `in_umbrella`, and a release of both.
-  umbrella = buildMixProject { src = ./fixtures/umbrella; };
+  umbrella = build { src = ./fixtures/umbrella; };
 
   # A path dependency beside the project (`path: "../helper"`), with a Hex
   # dependency of its own that the project's mix.lock locks.
-  pathdep = buildMixProject {
+  pathdep = build {
     src = ./fixtures/pathdep;
     root = "app";
   };
 
   # jason from a Hex repository named `mirror` rather than hexpm. The lock
   # run recorded the repository's URL in mix-purifier.lock.json.
-  hexrepo = buildMixProject { src = ./fixtures/hexrepo; };
+  hexrepo = build { src = ./fixtures/hexrepo; };
 
-  # A package with metadata and ex_doc, for `hexPackage`, `docs` and
+  # A package with metadata and ex_doc, for `release`, `packages.docs` and
   # publishing.
-  publishable = buildMixProject { src = ./fixtures/publish; };
+  publishable = build { src = ./fixtures/publish; };
+
+  # The basic fixture without its mix-purifier.lock.json, as a project whose
+  # author keeps none, built from the lockfile kept outside it.
+  external = build {
+    src = builtins.path {
+      name = "basic-without-lockfile";
+      path = ./fixtures/basic;
+      filter = file: _: baseNameOf file != "mix-purifier.lock.json";
+    };
+    lockFile = ./fixtures/basic/mix-purifier.lock.json;
+  };
 
   beam = {
     nativeBuildInputs = [
@@ -135,67 +96,102 @@ let
   # every dependency against mix.lock, offline and without Hex's registry,
   # and fails if any is missing or does not match.
   depsAccepted =
-    name: src: release:
+    name: src: project:
     pkgs.runCommand "mix-purifier-test-${name}-deps-accepted" (beam // { HEX_OFFLINE = 1; }) ''
       export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
       cp -r ${src} project
       chmod -R u+w project
-      cp -r ${release.deps} project/deps
+      cp -r ${project.deps} project/deps
       chmod -R u+w project/deps
       cd project
       mix deps.loadpaths --no-compile
       touch $out
     '';
 
-  # The offline interactive mode: `mix-purifier mix` copies the dependency
-  # directory into a copy of the git fixture and compiles it with Hex
-  # offline. A second run copies nothing, because no marker changed.
-  interactive = pkgs.runCommand "mix-purifier-test-interactive" beam ''
-    export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
-    export MIX_PURIFIER_DEPS=${git.deps}
-    cp -r ${./fixtures/git} project
-    chmod -R u+w project
-    cd project
-    ${cli}/bin/mix-purifier mix compile
-    test -f _build/dev/lib/decimal/ebin/decimal.app
-    test -f _build/dev/lib/jason/ebin/jason.app
-    touch deps/jason/marker-of-this-check
-    ${cli}/bin/mix-purifier mix compile
-    test -f deps/jason/marker-of-this-check
-    touch $out
-  '';
+  # A lockfile with the hash of its content, as `mix-purifier lock` writes
+  # it.
+  hashed =
+    name: content:
+    builtins.toFile name (
+      builtins.toJSON (
+        content // { hash = "sha256:" + builtins.hashString "sha256" (builtins.toJSON content); }
+      )
+    );
+  committed = path: removeAttrs (lib.importJSON path) [ "hash" ];
 
-  # Plain Mix works offline once `mix-purifier mix` has copied the
-  # dependencies into the project, which is what an editor's language
-  # server runs: in a copy of the git fixture, `mix compile` succeeds in
-  # the dev and test environments without HEX_OFFLINE and without the
-  # network.
-  plainMix =
-    pkgs.runCommand "mix-purifier-test-plain-mix" (beam // { MIX_PURIFIER_DEPS = git.deps; })
+  # Evaluation fails, rather than building with a dependency left out or
+  # unpinned. The CI job conformance-messages checks the message of each.
+  fails =
+    name: value:
+    let
+      result = builtins.tryEval (builtins.deepSeq value value);
+    in
+    assert lib.assertMsg (!result.success) "${name} evaluated, but it should fail";
+    pkgs.runCommand "mix-purifier-test-${name}" { } "touch $out";
+
+  downloadsOf =
+    args:
+    import ../nix/lib/downloads.nix { inherit lib; } (
+      {
+        lockFile = null;
+        hexMirror = "https://repo.hex.pm";
+      }
+      // args
+    );
+
+  # Two builds of the same release, told apart by a variable no build step
+  # reads, give the same files once the second build's store path is
+  # replaced by the first build's store path.
+  rebuild =
+    let
+      first = basic.packages.release-basic;
+      second = first.overrideAttrs { MIX_PURIFIER_SECOND_BUILD = "1"; };
+    in
+    pkgs.runCommand "mix-purifier-test-conformance-rebuild" { } ''
+      cp -r ${first} first
+      cp -r ${second} second
+      chmod -R u+w first second
+      find second -type f -exec sed -i 's|${builtins.baseNameOf second}|${builtins.baseNameOf first}|g' {} +
+      diff -r first second
+      touch $out
+    '';
+
+  # After `mix-purifier prefetch`, the everyday loop of the git fixture
+  # works with no network: the toolchain's `mix` compiles the project and
+  # runs its test. With a dependency missing from deps/, the toolchain's
+  # `mix` fails and names `mix-purifier lock`.
+  offline =
+    pkgs.runCommand "mix-purifier-test-conformance-offline" (beam // { MIX_PURIFIER_DEPS = git.deps; })
       ''
         export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
         cp -r ${./fixtures/git} project
         chmod -R u+w project
         cd project
-        ${cli}/bin/mix-purifier mix deps
-        mix compile
-        MIX_ENV=test mix compile
-        test -f _build/test/lib/git_dep/ebin/git_dep.app
+        ${cli}/bin/mix-purifier prefetch --no-editor
+        test "$(readlink _build/mix-purifier/toolchain)" = ${toolchain}
+        _build/mix-purifier/toolchain/bin/mix compile
+        _build/mix-purifier/toolchain/bin/mix test
+        rm -rf deps/jason
+        if _build/mix-purifier/toolchain/bin/mix compile 2> missing.log; then
+          echo "mix compiled with jason missing" >&2
+          exit 1
+        fi
+        grep -q 'run `mix-purifier lock`' missing.log
         touch $out
       '';
 
-  # The publish step: `mix-purifier publish` sends the package tarball and
+  # The publish step: `mix-purifier publish` sends the release and the
   # documentation Nix built to a stand-in for the Hex API, which receives
-  # exactly the tarball buildMixProject's `hexPackage` holds, with the
-  # configured API key, and a docs tarball holding the docs' index.html.
+  # exactly the tarball the project's `release` holds, with the configured
+  # API key, and a docs tarball holding the docs' index.html.
   publish =
     pkgs.runCommand "mix-purifier-test-publish"
       (
         beam
         // {
           nativeBuildInputs = beam.nativeBuildInputs ++ [ pkgs.python3 ];
-          MIX_PURIFIER_HEX_PACKAGE = publishable.hexPackage;
-          MIX_PURIFIER_DOCS = publishable.docs;
+          MIX_PURIFIER_RELEASE = publishable.release;
+          MIX_PURIFIER_DOCS = publishable.packages.docs;
         }
       )
       ''
@@ -209,79 +205,81 @@ let
         cd project
         ${cli}/bin/mix-purifier publish --yes
         cd ..
-        cmp received/release.tar ${publishable.hexPackage}/package.tar
+        cmp received/release.tar ${publishable.release}/package.tar
         test "$(cat received/authorization)" = mix-purifier-test-key
         tar -tzf received/docs.tar.gz > docs-files
         grep -qx index.html docs-files
-        tar -tf ${publishable.hexPackage}/package.tar > package-files
+        tar -tf ${publishable.release}/package.tar > package-files
         grep -qx metadata.config package-files
         touch $out
       '';
 
-  # A lock reader fails on input it cannot trust, rather than building with
-  # a dependency left out or unpinned.
-  fails =
-    name: value:
+  # A mix.lock whose inner checksum for jason was edited: the tarball still
+  # matches its outer checksum, so it downloads, and unpacking it fails
+  # with a message that names the checksum mix.lock locks.
+  tamperedInnerChecksum =
     let
-      result = builtins.tryEval (builtins.deepSeq value value);
+      tampered = builtins.toFile "mix.lock" (
+        builtins.replaceStrings
+          [ "2e3a008590b0b8d7388c20293e9dcc9cf3e5d642fd2a114e4cbbb52e595d940a" ]
+          [ "0000000000000000000000000000000000000000000000000000000000000000" ]
+          (builtins.readFile ./fixtures/basic/mix.lock)
+      );
+      failure =
+        pkgs.testers.testBuildFailure
+          (build {
+            src = ./fixtures/basic;
+            mixLock = tampered;
+          }).deps.hexPackages.jason;
     in
-    assert lib.assertMsg (!result.success) "${name} evaluated, but it should fail";
-    pkgs.runCommand "mix-purifier-test-${name}" { } "touch $out";
+    pkgs.runCommand "mix-purifier-test-tampered-inner-checksum" { } ''
+      grep -q 'the inner checksum is 2e3a0085.*but mix.lock locks 00000000' ${failure}/testBuildFailure.log
+      touch $out
+    '';
 
-  downloadsOf =
-    args:
-    import ../nix/lib/downloads.nix { inherit lib; } (
-      {
-        purifierLockFile = null;
-        hexMirror = "https://repo.hex.pm";
-      }
-      // args
-    );
-
-  staleGitLock = builtins.toFile "mix-purifier.lock.json" (
-    builtins.toJSON {
-      version = 1;
-      git.decimal = {
-        url = "https://github.com/ericmj/decimal.git";
-        rev = "0000000000000000000000000000000000000000";
-        submodules = false;
-        hash = lib.fakeHash;
-      };
-    }
-  );
-  futureLock = builtins.toFile "mix-purifier.lock.json" (
-    builtins.toJSON {
-      version = 999;
-    }
-  );
-  unreadableMixLock = builtins.toFile "mix.lock" ''
-    %{
-      "odd": {:svn, "https://example.org/odd", "1"},
-    }
-  '';
-  submoduleMixLock = builtins.toFile "mix.lock" ''
-    %{
-      "nested": {:git, "https://example.org/nested.git", "0123456789abcdef0123456789abcdef01234567", [branch: "main", submodules: true]},
-    }
-  '';
-  submoduleLock = builtins.toFile "mix-purifier.lock.json" (
-    builtins.toJSON {
-      version = 1;
-      git.nested = {
-        url = "https://example.org/nested.git";
-        rev = "0123456789abcdef0123456789abcdef01234567";
-        submodules = true;
-        hash = lib.fakeHash;
-      };
-    }
-  );
+  # Nix knows every output by name when it evaluates, from the lock alone.
+  outputsKnown =
+    assert
+      lib.attrNames basic.packages == [
+        "app-basic"
+        "docs"
+        "escript-basic"
+        "release-basic"
+      ];
+    assert basic.release == null;
+    assert
+      lib.attrNames umbrella.packages == [
+        "app-greeter"
+        "app-shouter"
+        "docs"
+        "release-umbrella"
+      ];
+    assert publishable.release != null;
+    assert
+      map (entry: entry.path) git.fetches == [
+        "hexpm/jason-1.4.5.tar"
+        "git/decimal"
+      ];
+    pkgs.runCommand "mix-purifier-test-outputs-known" { } "touch $out";
 
   # A git dependency with `submodules: true` is fetched with its submodules.
   readsSubmodules =
     let
       downloads = downloadsOf {
-        lockFile = submoduleMixLock;
-        purifierLockFile = submoduleLock;
+        mixLock = builtins.toFile "mix.lock" ''
+          %{
+            "nested": {:git, "https://example.org/nested.git", "0123456789abcdef0123456789abcdef01234567", [branch: "main", submodules: true]},
+          }
+        '';
+        lockFile = hashed "mix-purifier.lock.json" {
+          version = 1;
+          git.nested = {
+            url = "https://example.org/nested.git";
+            rev = "0123456789abcdef0123456789abcdef01234567";
+            submodules = true;
+            hash = lib.fakeHash;
+          };
+        };
       };
       entry = builtins.head downloads.git;
     in
@@ -289,115 +287,154 @@ let
     assert (purifier.fetchEntry { inherit pkgs; } entry).fetchSubmodules;
     pkgs.runCommand "mix-purifier-test-reads-submodules" { } "touch $out";
 
-  # Nix knows every output by name when it evaluates, from the lock alone:
-  # the releases, the project's own applications, the escripts and the Hex
-  # package.
-  outputsKnown =
-    assert lib.attrNames basic.releases == [ "basic" ];
-    assert lib.attrNames basic.escripts == [ "basic" ];
-    assert basic.hexPackage == null;
-    assert lib.attrNames umbrella.releases == [ "umbrella" ];
-    assert
-      lib.attrNames umbrella.apps == [
-        "greeter"
-        "shouter"
-      ];
-    assert umbrella.pname == "umbrella";
-    assert publishable.hexPackage != null;
-    assert publishable.outputs.package.name == "mix_purifier_publish_fixture";
-    pkgs.runCommand "mix-purifier-test-outputs-known" { } "touch $out";
-
-  # The escript runs.
-  basicEscript = pkgs.runCommand "mix-purifier-test-basic-escript" { } ''
-    out_text=$(${basic.escripts.basic}/bin/basic nix)
-    test "$out_text" = '{"event":"nix"}'
-    touch $out
-  '';
-
-  # Each of the umbrella's applications is compiled on its own.
-  umbrellaApps = pkgs.runCommand "mix-purifier-test-umbrella-apps" { } ''
-    test -f ${umbrella.apps.greeter}/ebin/greeter.app
-    test -f ${umbrella.apps.shouter}/ebin/shouter.app
-    touch $out
-  '';
-
-  # A mix.exs that changed since the lock fails the evaluation, and so does
-  # a project with no lock of its outputs.
-  staleMixExsLock = builtins.toFile "mix-purifier.lock.json" (
-    builtins.toJSON (
-      lib.recursiveUpdate (lib.importJSON ./fixtures/basic/mix-purifier.lock.json) {
-        outputs.definitionFiles."mix.exs" = lib.fakeSha256;
-      }
-    )
-  );
-
-  # The command runs, and its usage names every subcommand.
+  # The command runs, and its usage names every command.
   command = pkgs.runCommand "mix-purifier-test-command" { } ''
-    for subcommand in 'mix <args>' lock publish; do
+    for subcommand in lock prefetch publish; do
       ${cli}/bin/mix-purifier --help | grep -q "mix-purifier $subcommand"
     done
     touch $out
   '';
+
+  basicLock = committed ./fixtures/basic/mix-purifier.lock.json;
+  gitLock = committed ./fixtures/git/mix-purifier.lock.json;
+
+  relockChecks = lib.listToAttrs (
+    map
+      (
+        {
+          name,
+          root ? ".",
+        }:
+        lib.nameValuePair "${name}-relock" (
+          relock.reproduces {
+            inherit name root;
+            src = ./fixtures + "/${name}";
+            lockFile = ./fixtures + "/${name}/${root}/mix-purifier.lock.json";
+          }
+        )
+      )
+      [
+        { name = "git"; }
+        { name = "umbrella"; }
+        {
+          name = "pathdep";
+          root = "app";
+        }
+        { name = "hexrepo"; }
+        { name = "publish"; }
+      ]
+  );
 in
 {
-  basic-release = basic;
-  basic-runs = runs "basic" basic ''IO.puts(Basic.event_json("nix"))'' ''{"event":"nix"}'';
+  # The checks of the purifier contract.
+  conformance-stale =
+    fails "conformance-stale"
+      (build {
+        src = ./fixtures/basic;
+        lockFile = hashed "mix-purifier.lock.json" (
+          lib.recursiveUpdate basicLock { outputs.definitionFiles."mix.exs" = lib.fakeSha256; }
+        );
+      }).outputs;
+  conformance-tampered =
+    fails "conformance-tampered"
+      (build {
+        src = ./fixtures/git;
+        lockFile = builtins.toFile "mix-purifier.lock.json" (
+          builtins.toJSON (
+            lib.recursiveUpdate (lib.importJSON ./fixtures/git/mix-purifier.lock.json) {
+              git.decimal.hash = lib.fakeHash;
+            }
+          )
+        );
+      }).fetches;
+  conformance-missing =
+    fails "conformance-missing"
+      (build {
+        src = ./fixtures/git;
+        lockFile = hashed "mix-purifier.lock.json" (removeAttrs gitLock [ "git" ]);
+      }).fetches;
+  conformance-malformed =
+    fails "conformance-malformed"
+      (build {
+        src = ./fixtures/basic;
+        lockFile = builtins.toFile "mix-purifier.lock.json" (builtins.toJSON { outputs = [ ]; });
+      }).outputs;
+  conformance-relock = relock.reproduces {
+    name = "basic";
+    src = ./fixtures/basic;
+    lockFile = ./fixtures/basic/mix-purifier.lock.json;
+  };
+  conformance-rebuild = rebuild;
+  conformance-offline = offline;
+  conformance-external =
+    runs "external" external.packages.release-basic ''IO.puts(Basic.event_json("nix"))''
+      ''{"event":"nix"}'';
+
+  basic-release = basic.packages.release-basic;
+  basic-runs =
+    runs "basic" basic.packages.release-basic ''IO.puts(Basic.event_json("nix"))''
+      ''{"event":"nix"}'';
+  basic-escript = pkgs.runCommand "mix-purifier-test-basic-escript" { } ''
+    test "$(${basic.packages.escript-basic}/bin/basic nix)" = '{"event":"nix"}'
+    touch $out
+  '';
   basic-deps-accepted = depsAccepted "basic" ./fixtures/basic basic;
-  git-release = git;
   git-runs =
-    runs "git" git ''IO.puts(GitDep.sum_json(Decimal.new("1.5"), Decimal.new("2.25")))''
+    runs "git" git.packages.release-git_dep
+      ''IO.puts(GitDep.sum_json(Decimal.new("1.5"), Decimal.new("2.25")))''
       ''{"sum":"3.75"}'';
+  git-tests = git.tests;
   git-deps-accepted = depsAccepted "git" ./fixtures/git git;
-  umbrella-release = umbrella;
   umbrella-runs =
-    runs "umbrella" umbrella ''IO.puts(Shouter.shout("nix"))''
+    runs "umbrella" umbrella.packages.release-umbrella ''IO.puts(Shouter.shout("nix"))''
       ''{"GREETING":"HELLO, NIX"}'';
+  umbrella-apps = pkgs.runCommand "mix-purifier-test-umbrella-apps" { } ''
+    test -f ${umbrella.packages.app-greeter}/ebin/greeter.app
+    test -f ${umbrella.packages.app-shouter}/ebin/shouter.app
+    touch $out
+  '';
   umbrella-deps-accepted = depsAccepted "umbrella" ./fixtures/umbrella umbrella;
-  pathdep-release = pathdep;
-  pathdep-runs = runs "pathdep" pathdep "IO.puts(PathdepApp.run())" "helped";
-  hexrepo-release = hexrepo;
+  pathdep-runs =
+    runs "pathdep" pathdep.packages.release-pathdep_app "IO.puts(PathdepApp.run())"
+      "helped";
   hexrepo-runs =
-    runs "hexrepo" hexrepo ''IO.puts(Hexrepo.encode(%{repo: "mirror"}))''
+    runs "hexrepo" hexrepo.packages.release-hexrepo ''IO.puts(Hexrepo.encode(%{repo: "mirror"}))''
       ''{"repo":"mirror"}'';
   hexrepo-deps-accepted = depsAccepted "hexrepo" ./fixtures/hexrepo hexrepo;
-  inherit interactive publish;
+  inherit publish command;
+
   stale-git-lock = fails "stale-git-lock" (downloadsOf {
-    lockFile = ./fixtures/git/mix.lock;
-    purifierLockFile = staleGitLock;
-  });
-  missing-git-lock = fails "missing-git-lock" (downloadsOf {
-    lockFile = ./fixtures/git/mix.lock;
+    mixLock = ./fixtures/git/mix.lock;
+    lockFile = hashed "mix-purifier.lock.json" (
+      lib.recursiveUpdate gitLock {
+        git.decimal.rev = "0000000000000000000000000000000000000000";
+      }
+    );
   });
   missing-hex-repo = fails "missing-hex-repo" (downloadsOf {
-    lockFile = ./fixtures/hexrepo/mix.lock;
+    mixLock = ./fixtures/hexrepo/mix.lock;
   });
-  future-lock-version = fails "future-lock-version" (downloadsOf {
-    lockFile = ./fixtures/basic/mix.lock;
-    purifierLockFile = futureLock;
-  });
-  unreadable-mix-lock = fails "unreadable-mix-lock" (downloadsOf {
-    lockFile = unreadableMixLock;
-  });
-  reads-submodules = readsSubmodules;
-  outputs-known = outputsKnown;
-  basic-escript = basicEscript;
-  umbrella-apps = umbrellaApps;
-  stale-mix-exs =
-    fails "stale-mix-exs"
-      (buildMixProject {
-        src = ./fixtures/basic;
-        purifierLockFile = staleMixExsLock;
-      }).outputs;
   missing-outputs =
     fails "missing-outputs"
-      (buildMixProject {
+      (build {
         src = ./fixtures/basic;
-        purifierLockFile = null;
+        lockFile = null;
       }).outputs;
-  inherit command;
-  unit = import ./unit.nix { inherit pkgs; };
+  future-lock-version = fails "future-lock-version" (downloadsOf {
+    mixLock = ./fixtures/basic/mix.lock;
+    lockFile = hashed "mix-purifier.lock.json" (basicLock // { version = 999; });
+  });
+  unreadable-mix-lock = fails "unreadable-mix-lock" (downloadsOf {
+    mixLock = builtins.toFile "mix.lock" ''
+      %{
+        "odd": {:svn, "https://example.org/odd", "1"},
+      }
+    '';
+  });
   tampered-inner-checksum = tamperedInnerChecksum;
-  plain-mix = plainMix;
+  outputs-known = outputsKnown;
+  reads-submodules = readsSubmodules;
+  unit = import ./unit.nix { inherit pkgs; };
 }
 // relockChecks
 // credo.checks

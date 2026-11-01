@@ -7,6 +7,7 @@
       "url": "https://github.com/ericmj/decimal.git"
     }
   },
+  "hash": "sha256:507c3be1ded0797a4bc65a4e0a29f9ef9c6496c3769782c98aa025e8046e233a",
   "outputs": {
     "app": "git_dep",
     "apps": {

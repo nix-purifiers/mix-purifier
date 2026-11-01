@@ -15,15 +15,17 @@
 # `mix`.
 { lib }:
 {
+  # mix.lock.
+  mixLock,
+  # mix-purifier.lock.json, or null for a project without one.
   lockFile,
-  purifierLockFile,
   # The URL that serves hexpm's tarballs. A mirror serves the same files,
   # so the locked hashes still hold.
   hexMirror,
 }:
 let
-  mixLock = import ./mix-lock.nix { inherit lib; } lockFile;
-  purifierLock = import ./purifier-lock.nix { inherit lib; } purifierLockFile;
+  mixLockEntries = import ./mix-lock.nix { inherit lib; } mixLock;
+  purifierLock = import ./purifier-lock.nix { inherit lib; } lockFile;
 
   # A private repository, such as a Hex organization, needs credentials
   # that never enter Nix: `mix-purifier lock` downloads its tarballs with
@@ -75,6 +77,6 @@ in
 # The purifier lock's version is checked even when mix.lock has no git
 # dependency, so a lock from another mix-purifier never passes unread.
 builtins.seq purifierLock {
-  hex = map hexDownload mixLock.hex;
-  git = map gitDownload mixLock.git;
+  hex = map hexDownload mixLockEntries.hex;
+  git = map gitDownload mixLockEntries.git;
 }

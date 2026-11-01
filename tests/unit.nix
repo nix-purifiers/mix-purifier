@@ -17,9 +17,20 @@ let
       hexMirror ? "https://repo.hex.pm",
     }:
     import ../nix/lib/downloads.nix { inherit lib; } {
-      lockFile = builtins.toFile "mix.lock" mixLock;
-      purifierLockFile =
-        if purifierLock == null then null else builtins.toFile "lock.json" (builtins.toJSON purifierLock);
+      mixLock = builtins.toFile "mix.lock" mixLock;
+      # With the hash of its content, as `mix-purifier lock` writes it.
+      lockFile =
+        if purifierLock == null then
+          null
+        else
+          builtins.toFile "lock.json" (
+            builtins.toJSON (
+              purifierLock
+              // {
+                hash = "sha256:" + builtins.hashString "sha256" (builtins.toJSON purifierLock);
+              }
+            )
+          );
       inherit hexMirror;
     };
 

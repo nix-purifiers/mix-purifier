@@ -3,10 +3,12 @@
 # Runs the test suite on every push to main and on every pull request.
 #
 # `check` builds every check of the flake on x86_64-linux and on
-# aarch64-linux, each on a runner of its own system: the fixtures, the
-# real-world project (credo), the offline lock run, the language server and
-# the publish step. `relock` runs the online lock run on every fixture and
-# fails if a lockfile changes.
+# aarch64-linux, each on a runner of its own system, among them the
+# conformance-* checks of the purifier contract and the real-world project
+# (credo). It then runs the two contract checks the sandbox cannot run:
+# conformance-messages, which reads the message of each failing lockfile,
+# and conformance-rebuild, `nix build --rebuild` of a fixture. `relock` runs
+# the online lock run on every fixture and fails if a lockfile changes.
 name: check
 
 on:
@@ -29,8 +31,13 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Build the checks
         run: nix flake check -L
-      - name: Evaluate the checks for every system
-        run: nix flake check --all-systems --no-build
+      - name: conformance-messages
+        run: bash tests/conformance-messages.sh
+      - name: conformance-rebuild
+        run: |
+          release=".#checks.$(nix eval --raw --impure --expr builtins.currentSystem).basic-release"
+          nix build --no-link "$release"
+          nix build --no-link --rebuild "$release"
 
   relock:
     runs-on: ubuntu-latest

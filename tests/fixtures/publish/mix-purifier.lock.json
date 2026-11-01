@@ -1,4 +1,5 @@
 {
+  "hash": "sha256:880b18b410c65c2f0dbb308db97bd8b84533611482a9be34f7b65a7020d7c824",
   "outputs": {
     "app": "mix_purifier_publish_fixture",
     "apps": {

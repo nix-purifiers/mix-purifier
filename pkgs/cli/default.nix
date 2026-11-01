@@ -1,25 +1,33 @@
 # SPDX-License-Identifier: MIT
 #
-# The `mix-purifier` command.
+# The `mix-purifier` command, with the three commands of the purifier
+# contract. Each takes `--lockfile <path>` for a mix-purifier.lock.json kept
+# outside the project; the default is the one beside mix.lock.
 #
-# - `mix-purifier mix <args>` builds the project's deps/ directory from its
-#   locks with Nix (nix/lib/deps.nix), copies each dependency that changed
-#   into ./deps, and runs Mix with Hex offline. The Mix tasks that change
-#   mix.lock (`deps.get`, `deps.update`, `deps.unlock`) run online instead.
-#   With MIX_PURIFIER_DEPS naming a dependency directory Nix already built,
-#   such as buildMixProject's `deps`, it copies that one instead.
-# - `mix-purifier lock` runs `mix deps.get`, which brings mix.lock up to date
-#   with mix.exs, then writes mix-purifier.lock.json: the project's outputs
-#   as Mix reports them (nix/lock-info.exs), the hash of each git
-#   dependency's checkout, and the URL of each Hex repository other than
-#   hexpm. It downloads the tarballs of those repositories with Hex and adds
-#   them to the Nix store, so a build needs no Hex credentials. With
-#   `--offline` it runs no `mix deps.get` and reuses the recorded hashes and
-#   URLs, so it rewrites the outputs without the network.
+# - `mix-purifier lock` runs `mix deps.get`, which brings mix.lock up to
+#   date with mix.exs, then writes mix-purifier.lock.json: the project's
+#   outputs as Mix reports them (nix/lock-info.exs), the hash of each git
+#   dependency's checkout, the URL of each Hex repository other than hexpm,
+#   and the hash of its own content. It downloads the tarballs of those
+#   repositories with Hex and adds them to the Nix store, so a build needs
+#   no Hex credentials. With `--offline` it runs no `mix deps.get` and
+#   reuses the recorded hashes and URLs.
+# - `mix-purifier prefetch` builds the project's deps/ directory from the
+#   locks (nix/lib/deps.nix), copies each dependency that changed into
+#   ./deps, and keeps it and the toolchain (pkgs/toolchain) alive with
+#   garbage-collector roots under _build/mix-purifier. It also starts the
+#   toolchain's language server once, so it fetches its own files. After
+#   it, the toolchain's `mix` and `elixir-ls` work with no network.
+#   MIX_PURIFIER_DEPS names a dependency directory Nix already built, such
+#   as buildMixProject's `deps`, to copy instead.
 # - `mix-purifier publish` builds the package tarball and documentation with
-#   Nix (buildMixProject's `hexPackage` and `docs`) and publishes them with
-#   Hex (nix/hex-publish.exs). MIX_PURIFIER_HEX_PACKAGE and
+#   Nix (buildMixProject's `release` and `packages.docs`) and publishes them
+#   with Hex (nix/hex-publish.exs). MIX_PURIFIER_RELEASE and
 #   MIX_PURIFIER_DOCS name ones Nix already built.
+#
+# Each command checks the lockfile first, and fails with a message that
+# names `mix-purifier lock` when it is missing, not valid JSON, of another
+# version, edited by hand, or older than a mix.exs it records.
 #
 # The Erlang, Elixir, Hex and rebar3 the command runs are those of
 # `beamPackages`, so `.override { beamPackages = beam27Packages; }` runs
@@ -32,35 +40,38 @@
   git,
   jq,
   nix-prefetch-git,
+  toolchain,
   version,
 }:
 let
   nixLib = ../../nix;
   importNixpkgs = "import ${path} { config = { }; overlays = [ ]; }";
-  # The shared purifier library, from this flake's own `lib`, which holds
-  # the library of each project the flake lists. The flake and its locked
+  # This flake's own `lib`, which holds the library of each project the
+  # flake lists, the purifier library among them. The flake and its locked
   # inputs are in the store already, because Nix evaluated them to build
   # this command.
-  purifierLib = "(builtins.getFlake \"path:${../..}\").lib.purifier";
+  flakeLib = "(builtins.getFlake \"path:${../..}\").lib";
   # Builds the dependency directory of a project, given its lock files by
   # absolute path.
   depsExpression = builtins.toFile "mix-purifier-deps.nix" ''
-    { lockFile, purifierLockFile }:
+    { mixLock, lockFile }:
     let
       pkgs = ${importNixpkgs};
     in
-    pkgs.callPackage ${nixLib}/lib/deps.nix { fetchEntry = ${purifierLib}.fetchEntry { inherit pkgs; }; } {
+    pkgs.callPackage ${nixLib}/lib/deps.nix { fetchEntry = ${flakeLib}.purifier.fetchEntry { inherit pkgs; }; } {
+      mixLock = /. + mixLock;
       lockFile = /. + lockFile;
-      purifierLockFile = if purifierLockFile == "" then null else /. + purifierLockFile;
     }
   '';
-  # Builds a project's package tarball and documentation, from its directory
+  # Builds a project's release and documentation, from its directory
   # without what Mix and Nix leave in it.
   publishExpression = builtins.toFile "mix-purifier-publish.nix" ''
-    { projectDir }:
+    { projectDir, lockFile }:
     let
       pkgs = ${importNixpkgs};
-      project = pkgs.callPackage ${nixLib}/lib/build-mix-project.nix { purifier = ${purifierLib}; } {
+      project = ${flakeLib}.mix-purifier.buildMixProject {
+        inherit pkgs;
+        lockFile = /. + lockFile;
         src = builtins.path {
           name = "source";
           path = /. + projectDir;
@@ -72,7 +83,12 @@ let
       };
     in
     {
-      inherit (project) hexPackage docs;
+      release =
+        if project.release == null then
+          throw "mix-purifier: ''${projectDir}/mix.exs has no package metadata, so there is no Hex package to publish."
+        else
+          project.release;
+      docs = project.packages.docs;
     }
   '';
 in
@@ -93,68 +109,55 @@ writeShellApplication {
     mix-purifier ${version}
 
     Usage:
-      mix-purifier mix <args>    Run Mix offline, with deps/ built from the locks
-      mix-purifier lock [--offline]
-                                 Resolve mix.lock and write mix-purifier.lock.json
-      mix-purifier publish [--organization ORG] [--replace] [--yes] [--no-docs]
-                                 Publish the package and docs that Nix builds
+      mix-purifier lock [--offline] [--lockfile PATH]
+          Resolve mix.lock and write mix-purifier.lock.json
+      mix-purifier prefetch [--no-editor] [--lockfile PATH]
+          Make the everyday loop and the editor work with no network
+      mix-purifier publish [--organization ORG] [--replace] [--yes] [--no-docs] [--lockfile PATH]
+          Publish the package and docs that Nix builds
 
-    Run them in the directory of mix.exs. The Mix tasks deps.get, deps.update
-    and deps.unlock change mix.lock, so `mix-purifier mix` runs them online.
+    Run them in the directory of mix.exs. After `mix-purifier prefetch`, run
+    Mix as _build/mix-purifier/toolchain/bin/mix, or put that directory first
+    on PATH.
     EOF
     }
 
     export ERL_LIBS=${beamPackages.hex}/lib/erlang/lib''${ERL_LIBS:+:$ERL_LIBS}
     export MIX_REBAR3=${beamPackages.rebar3}/bin/rebar3
 
-    require_lock() {
-      if [ ! -f mix.lock ]; then
-        echo "mix-purifier: there is no mix.lock in $PWD. Run \`mix-purifier lock\` first." >&2
-        exit 1
-      fi
+    lockfile=$PWD/mix-purifier.lock.json
+
+    fail() {
+      echo "mix-purifier: $1" >&2
+      exit 1
     }
 
-    # Warns about each mix.exs that changed since mix-purifier.lock.json
-    # recorded it, which a Nix build of the project refuses.
-    warn_stale_lock() {
-      local file hash
-      [ -f mix-purifier.lock.json ] || return 0
+    require_mix_lock() {
+      [ -f mix.lock ] || fail "there is no mix.lock in $PWD. Run \`mix-purifier lock\`."
+    }
+
+    # The hash a lockfile records of its own content: the SHA-256 of the
+    # rest of the file as compact JSON with sorted keys, the form Nix's
+    # builtins.toJSON writes.
+    content_hash() {
+      echo "sha256:$(jq -cjS 'del(.hash)' | sha256sum | cut -d ' ' -f 1)"
+    }
+
+    # Fails, naming `mix-purifier lock`, unless the lockfile is one that
+    # command wrote for the project as it is.
+    check_lock() {
+      local fix="Run \`mix-purifier lock\` to rewrite it." file hash
+      [ -f "$lockfile" ] || fail "there is no $lockfile. Run \`mix-purifier lock\`."
+      jq empty "$lockfile" 2>/dev/null || fail "$lockfile is not valid JSON. $fix"
+      [ "$(jq '.version' "$lockfile")" = 1 ] \
+        || fail "$lockfile is not of format version 1, which this mix-purifier reads. $fix"
+      [ "$(jq -r '.hash // empty' "$lockfile")" = "$(content_hash < "$lockfile")" ] \
+        || fail "$lockfile does not match the hash of its content, so it was edited after \`mix-purifier lock\` wrote it. $fix"
       while IFS=$'\t' read -r file hash; do
         if [ ! -f "$file" ] || [ "$(sha256sum "$file" | cut -d ' ' -f 1)" != "$hash" ]; then
-          echo "mix-purifier: $file changed since mix-purifier.lock.json was written. Run \`mix-purifier lock\` before a Nix build." >&2
+          fail "$file changed since $lockfile was written. Run \`mix-purifier lock\`."
         fi
-      done < <(jq -r '.outputs.definitionFiles // {} | to_entries[] | [.key, .value] | @tsv' mix-purifier.lock.json)
-    }
-
-    # Builds deps/ from the locks, unless MIX_PURIFIER_DEPS names one, and
-    # copies each dependency whose marker (.hex for a Hex package, .git/HEAD
-    # for a git dependency) changed into ./deps.
-    sync_deps() {
-      local purifier_lock="" built key src marker
-      mkdir -p deps
-      if [ -n "''${MIX_PURIFIER_DEPS-}" ]; then
-        built=$MIX_PURIFIER_DEPS
-      else
-        if [ -f mix-purifier.lock.json ]; then
-          purifier_lock="$PWD/mix-purifier.lock.json"
-        fi
-        mkdir -p _build/mix-purifier
-        built=$(nix-build --no-build-output --out-link _build/mix-purifier/deps \
-          --argstr lockFile "$PWD/mix.lock" \
-          --argstr purifierLockFile "$purifier_lock" \
-          ${depsExpression})
-      fi
-      for src in "$built"/*; do
-        [ -e "$src" ] || continue
-        key=$(basename "$src")
-        if [ -f "$src/.hex" ]; then marker=.hex; else marker=.git/HEAD; fi
-        if cmp -s "$src/$marker" "deps/$key/$marker"; then
-          continue
-        fi
-        rm -rf "deps/$key"
-        cp -r "$src" "deps/$key"
-        chmod -R u+w "deps/$key"
-      done
+      done < <(jq -r '.outputs.definitionFiles // {} | to_entries[] | [.key, .value] | @tsv' "$lockfile")
     }
 
     # Locks the git dependencies: prints {"<key>": {url, rev, submodules,
@@ -190,14 +193,14 @@ writeShellApplication {
       jq '.hexRepos' <<<"$resolved"
     }
 
-    # The offline lock run: prints what the current mix-purifier.lock.json
-    # records in SECTION (git or hexRepos) for the mix.lock entries given as
-    # JSON. It fails, naming the online lock run, when the lock does not
-    # record one of them as mix.lock has it.
+    # The offline lock run: prints what the current lockfile records in
+    # SECTION (git or hexRepos) for the mix.lock entries given as JSON. It
+    # fails, naming the online lock run, when the lockfile does not record
+    # one of them as mix.lock has it.
     reuse_locked() {
       local section=$1 entries=$2 previous='{}' wanted missing
-      if [ -f mix-purifier.lock.json ]; then
-        previous=$(jq ".$section // {}" mix-purifier.lock.json)
+      if [ -f "$lockfile" ]; then
+        previous=$(jq ".$section // {}" "$lockfile")
       fi
       if [ "$section" = git ]; then
         wanted=$(jq 'map({key: .key, value: {url, rev, submodules}}) | from_entries' <<<"$entries")
@@ -208,26 +211,20 @@ writeShellApplication {
         missing=$(jq -r --argjson previous "$previous" 'keys[] | select($previous[.] == null)' <<<"$wanted")
       fi
       if [ -n "$missing" ]; then
-        echo "mix-purifier: mix-purifier.lock.json does not record $(tr '\n' ' ' <<<"$missing")as mix.lock has it, and --offline cannot look it up. Run \`mix-purifier lock\` online." >&2
-        exit 1
+        fail "$lockfile does not record $(tr '\n' ' ' <<<"$missing")as mix.lock has it, and --offline cannot look it up. Run \`mix-purifier lock\` online."
       fi
       jq --argjson previous "$previous" 'with_entries(.value = $previous[.key])' <<<"$wanted"
     }
 
     lock() {
-      local offline=false info outputs git_entries repo_entries git_locked='{}' hex_repos='{}'
-      case "''${1-}" in
-        --offline) offline=true ;;
-        "") ;;
-        *) usage >&2; exit 2 ;;
-      esac
+      local offline=$1 info outputs git_entries repo_entries git_locked='{}' hex_repos='{}' content hash
       if [ "$offline" = false ]; then
         # Mix resolves what mix.exs asks for, online, and leaves mix.lock
         # untouched when it already covers mix.exs.
         echo "mix-purifier: resolving mix.lock with \`mix deps.get\`" >&2
         mix deps.get
       fi
-      require_lock
+      require_mix_lock
       # The builds use MIX_ENV=prod, so the outputs are those of prod.
       info=$(MIX_ENV=prod elixir ${nixLib}/lock-info.exs)
       outputs=$(jq '.outputs' <<<"$info")
@@ -247,75 +244,104 @@ writeShellApplication {
           hex_repos=$(lock_hex_repos "$repo_entries")
         fi
       fi
-      jq --sort-keys -n --argjson outputs "$outputs" \
+      content=$(jq --sort-keys -n --argjson outputs "$outputs" \
         --argjson git "$git_locked" --argjson hexRepos "$hex_repos" \
-        '{version: 1, outputs: $outputs} + (if $git == {} then {} else {git: $git} end) + (if $hexRepos == {} then {} else {hexRepos: $hexRepos} end)' \
-        > mix-purifier.lock.json
-      echo "mix-purifier: wrote mix-purifier.lock.json"
+        '{version: 1, outputs: $outputs} + (if $git == {} then {} else {git: $git} end) + (if $hexRepos == {} then {} else {hexRepos: $hexRepos} end)')
+      hash=$(content_hash <<<"$content")
+      jq --sort-keys --arg hash "$hash" '. + {hash: $hash}' <<<"$content" > "$lockfile"
+      echo "mix-purifier: wrote $lockfile"
+    }
+
+    # Keeps TARGET alive with a garbage-collector root at LINK, or links it
+    # where Nix cannot register roots, such as the sandbox.
+    keep_alive() {
+      local target=$1 link=$2
+      if command -v nix-store > /dev/null; then
+        nix-store --realise "$target" --add-root "$link" --indirect > /dev/null
+      else
+        ln -sfn "$target" "$link"
+      fi
+    }
+
+    prefetch() {
+      local editor=$1 built key src marker
+      require_mix_lock
+      check_lock
+      mkdir -p deps _build/mix-purifier
+      if [ -n "''${MIX_PURIFIER_DEPS-}" ]; then
+        built=$MIX_PURIFIER_DEPS
+      else
+        built=$(nix-build --no-build-output --out-link _build/mix-purifier/deps \
+          --argstr mixLock "$PWD/mix.lock" \
+          --argstr lockFile "$lockfile" \
+          ${depsExpression})
+      fi
+      for src in "$built"/*; do
+        [ -e "$src" ] || continue
+        key=$(basename "$src")
+        if [ -f "$src/.hex" ]; then marker=.hex; else marker=.git/HEAD; fi
+        if cmp -s "$src/$marker" "deps/$key/$marker"; then
+          continue
+        fi
+        rm -rf "deps/$key"
+        cp -r "$src" "deps/$key"
+        chmod -R u+w "deps/$key"
+      done
+      keep_alive ${toolchain} _build/mix-purifier/toolchain
+      if [ "$editor" = true ]; then
+        # The language server fetches its own files when it first starts;
+        # at the end of its input it stops again.
+        echo "mix-purifier: starting the language server once, so it fetches its own files" >&2
+        timeout 600 _build/mix-purifier/toolchain/bin/elixir-ls < /dev/null > /dev/null \
+          || fail "the language server did not start. Run \`mix-purifier prefetch\` again with the network, or with --no-editor."
+      fi
+      echo "mix-purifier: the dependencies and toolchain are in place. Run Mix as _build/mix-purifier/toolchain/bin/mix, and point the editor at _build/mix-purifier/toolchain/bin/elixir-ls."
     }
 
     publish() {
-      local docs=true publish_args=() built
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          --no-docs) docs=false ;;
-          --organization) publish_args+=(--organization "$2"); shift ;;
-          --replace | --yes) publish_args+=("$1") ;;
-          *) usage >&2; exit 2 ;;
-        esac
-        shift
-      done
-      require_lock
+      local docs=$1 built
+      shift
+      require_mix_lock
+      check_lock
       mkdir -p _build/mix-purifier
-      if [ -n "''${MIX_PURIFIER_HEX_PACKAGE-}" ]; then
-        built=$MIX_PURIFIER_HEX_PACKAGE
+      if [ -n "''${MIX_PURIFIER_RELEASE-}" ]; then
+        built=$MIX_PURIFIER_RELEASE
       else
-        built=$(nix-build --no-build-output --out-link _build/mix-purifier/hex-package \
-          --argstr projectDir "$PWD" -A hexPackage ${publishExpression})
+        built=$(nix-build --no-build-output --out-link _build/mix-purifier/release \
+          --argstr projectDir "$PWD" --argstr lockFile "$lockfile" -A release ${publishExpression})
       fi
+      local publish_args=("$@")
       if [ "$docs" = true ] && [ -n "''${MIX_PURIFIER_DOCS-}" ]; then
         publish_args+=(--docs "$MIX_PURIFIER_DOCS")
       elif [ "$docs" = true ]; then
         publish_args+=(--docs "$(nix-build --no-build-output --out-link _build/mix-purifier/docs \
-          --argstr projectDir "$PWD" -A docs ${publishExpression})")
+          --argstr projectDir "$PWD" --argstr lockFile "$lockfile" -A docs ${publishExpression})")
       fi
       elixir ${nixLib}/hex-publish.exs "$built/package.tar" "''${publish_args[@]}"
     }
 
-    run_mix() {
-      case "''${1-}" in
-        deps.get | deps.update | deps.unlock)
-          mix "$@"
-          echo "mix-purifier: run \`mix-purifier lock\` to record the change in mix-purifier.lock.json." >&2
-          return
-          ;;
+    command=''${1-}
+    [ $# -gt 0 ] && shift
+    offline=false editor=true docs=true hex_args=()
+    while [ $# -gt 0 ]; do
+      case "$command:$1" in
+        *:--lockfile) lockfile=$(realpath -m "$2"); shift ;;
+        lock:--offline) offline=true ;;
+        prefetch:--no-editor) editor=false ;;
+        publish:--no-docs) docs=false ;;
+        publish:--organization) hex_args+=(--organization "$2"); shift ;;
+        publish:--replace | publish:--yes) hex_args+=("$1") ;;
+        *) usage >&2; exit 2 ;;
       esac
-      require_lock
-      warn_stale_lock
-      sync_deps
-      HEX_OFFLINE=1 exec mix "$@"
-    }
+      shift
+    done
 
-    case "''${1-}" in
-      mix)
-        shift
-        run_mix "$@"
-        ;;
-      lock)
-        shift
-        lock "$@"
-        ;;
-      publish)
-        shift
-        publish "$@"
-        ;;
-      -h | --help | help | "")
-        usage
-        ;;
-      *)
-        usage >&2
-        exit 2
-        ;;
+    case "$command" in
+      lock) lock "$offline" ;;
+      prefetch) prefetch "$editor" ;;
+      publish) publish "$docs" "''${hex_args[@]}" ;;
+      -h | --help | help | "") usage ;;
+      *) usage >&2; exit 2 ;;
     esac
   '';
 }

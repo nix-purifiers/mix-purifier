@@ -22,13 +22,15 @@
   fetchEntry,
 }:
 {
-  lockFile,
-  purifierLockFile ? null,
+  # mix.lock.
+  mixLock,
+  # mix-purifier.lock.json, or null for a project that uses hexpm only.
+  lockFile ? null,
   hexMirror ? "https://repo.hex.pm",
 }:
 let
   downloads = import ./downloads.nix { inherit lib; } {
-    inherit lockFile purifierLockFile hexMirror;
+    inherit mixLock lockFile hexMirror;
   };
   fetch = fetchEntry;
 

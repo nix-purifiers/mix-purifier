@@ -25,9 +25,9 @@
     };
   };
 
-  # `nix run github:nix-purifiers/mix-purifier -- mix <args>` runs Mix
-  # offline with the dependencies of the project in the current directory,
-  # and `… -- lock` locks its git dependencies.
+  # `nix run github:nix-purifiers/mix-purifier -- lock` locks the project in
+  # the current directory, `… -- prefetch` readies it for work with no
+  # network, and `… -- publish` publishes what Nix built.
   perSystem =
     { config, ... }:
     {
@@ -58,8 +58,8 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              overlay = self.overlays.default;
-              inherit (self.packages.${system}) cli;
+              inherit (self.packages.${system}) cli toolchain;
+              mixPurifier = self.lib.mix-purifier;
               inherit (self.lib) purifier;
             };
             treefmt.programs.nixfmt.enable = true;
