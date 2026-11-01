@@ -20,11 +20,15 @@
 # - `release`: the package tarball `mix hex.build` builds, as
 #   `package.tar`, which `mix-purifier publish` uploads. It is null for a
 #   project with no package metadata.
-# - `fetches`: the purifier library entries the build fetches.
-# - `deps`: the dependency directory (deps.nix), and `outputs`: the record
-#   of the outputs, as mix-purifier.lock.json holds it.
+# - `fetches`: the purifier library entries the build fetches, which are
+#   the entries of the lock.
+# - `lock`: the lock in memory (readLock), `deps`: the dependency
+#   directory (deps.nix), and `outputs`: the record of the outputs, as
+#   mix-purifier.lock.json holds it.
 #
-# A mix.exs that changed since the lock was written fails the evaluation,
+# The builder reads the locks with readLock and passes the result to the
+# purifier library's checkLock, so a lock with problems, such as a mix.exs
+# that changed since the lock was written, fails the evaluation with them,
 # rather than building outputs the lock no longer describes.
 #
 # nixpkgs' mixRelease compiles each output, offline. Every argument
@@ -65,23 +69,19 @@
 }@args:
 let
   projectDir = src + "/${root}";
-  purifierLock = import ./purifier-lock.nix { inherit lib; } lockFile;
-
-  recorded =
-    if lockFile == null || purifierLock.outputs == null then
-      throw "mix-purifier: ${toString projectDir} has no mix-purifier.lock.json with the project's outputs. Run `mix-purifier lock`."
-    else
-      purifierLock.outputs;
-  changed = lib.attrNames (
-    lib.filterAttrs (
-      file: hash: builtins.hashFile "sha256" (projectDir + "/${file}") != hash
-    ) recorded.definitionFiles
-  );
-  outputs =
-    if changed != [ ] then
-      throw "mix-purifier: ${lib.concatStringsSep ", " changed} changed since mix-purifier.lock.json was written. Run `mix-purifier lock`."
-    else
-      recorded;
+  # The lock in memory of the purifier contract. checkLock fails evaluation
+  # with its problems, each naming `mix-purifier lock`.
+  lock = import ./read-lock.nix { inherit lib; } {
+    inherit
+      src
+      root
+      lockFile
+      mixLock
+      hexMirror
+      ;
+  };
+  checked = lib.purifier.checkLock lock;
+  outputs = checked.record;
 
   name =
     args.pname or (
@@ -100,15 +100,10 @@ let
         throw "mix-purifier: ${toString projectDir}/mix.exs sets no version. Give `version` to buildMixProject."
     );
 
-  deps =
-    pkgs.callPackage ./deps.nix
-      {
-        inherit beamPackages;
-        fetchEntry = lib.purifier.fetchEntry ({ inherit pkgs; } // fetchers);
-      }
-      {
-        inherit mixLock lockFile hexMirror;
-      };
+  deps = pkgs.callPackage ./deps.nix {
+    inherit beamPackages;
+    fetchEntry = lib.purifier.fetchEntry ({ inherit pkgs; } // fetchers);
+  } (lib.purifier.entriesFor pkgs.stdenv.hostPlatform.system checked);
 
   common =
     removeAttrs args [
@@ -224,7 +219,7 @@ in
         '';
       };
 
-  fetches = deps.downloads.hex ++ deps.downloads.git;
+  fetches = checked.entries;
 
-  inherit deps outputs;
+  inherit deps outputs lock;
 }

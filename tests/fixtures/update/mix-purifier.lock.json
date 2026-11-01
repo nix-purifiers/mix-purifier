@@ -1,0 +1,22 @@
+{
+  "hash": "sha256:8e9e5ef8f11a063f2f6bf398a3b4a2c985495f3f6ee2edf7664744b94aad1981",
+  "outputs": {
+    "app": "update_fixture",
+    "apps": {
+      "update_fixture": {
+        "path": ".",
+        "version": "0.7.0"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "9f42d6ba603b49b62754d98044b0b5b3d2597346137f4af2654183e3b3b2a6d6"
+    },
+    "escripts": [],
+    "package": null,
+    "releases": [
+      "update_fixture"
+    ],
+    "version": "0.7.0"
+  },
+  "version": 1
+}

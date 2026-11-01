@@ -12,6 +12,10 @@
 #   repositories with Hex and adds them to the Nix store, so a build needs
 #   no Hex credentials. With `--offline` it runs no `mix deps.get` and
 #   reuses the recorded hashes and URLs.
+# - `mix-purifier update [<package>...]` updates the named dependencies, or
+#   every one, with Mix's own `mix deps.update`, then runs the lock run on
+#   the result. `lock` keeps mix.lock as Mix resolved it, adding only what
+#   mix.exs asks for and mix.lock lacks.
 # - `mix-purifier prefetch` builds the project's deps/ directory from the
 #   locks (nix/lib/deps.nix), copies each dependency that changed into
 #   ./deps, and keeps it and the toolchain (pkgs/toolchain) alive with
@@ -51,17 +55,22 @@ let
   # inputs are in the store already, because Nix evaluated them to build
   # this command.
   flakeLib = "(builtins.getFlake \"path:${../..}\").lib";
-  # Builds the dependency directory of a project, given its lock files by
-  # absolute path.
+  # Builds the dependency directory of a project, given its directory and
+  # its lockfile by absolute path, from the entries of its lock for this
+  # system.
   depsExpression = builtins.toFile "mix-purifier-deps.nix" ''
-    { mixLock, lockFile }:
+    { projectDir, lockFile }:
     let
       pkgs = ${importNixpkgs};
+      lib = ${flakeLib};
+      lock = lib.mix-purifier.readLock {
+        src = /. + projectDir;
+        lockFile = /. + lockFile;
+      };
     in
-    pkgs.callPackage ${nixLib}/lib/deps.nix { fetchEntry = ${flakeLib}.purifier.fetchEntry { inherit pkgs; }; } {
-      mixLock = /. + mixLock;
-      lockFile = /. + lockFile;
-    }
+    pkgs.callPackage ${nixLib}/lib/deps.nix { fetchEntry = lib.purifier.fetchEntry { inherit pkgs; }; } (
+      lib.purifier.entriesFor pkgs.stdenv.hostPlatform.system lock
+    )
   '';
   # Builds a project's release and documentation, from its directory
   # without what Mix and Nix leave in it.
@@ -111,6 +120,8 @@ writeShellApplication {
     Usage:
       mix-purifier lock [--offline] [--lockfile PATH]
           Resolve mix.lock and write mix-purifier.lock.json
+      mix-purifier update [PACKAGE...] [--lockfile PATH]
+          Update the dependencies with mix deps.update, then lock
       mix-purifier prefetch [--no-editor] [--lockfile PATH]
           Make the everyday loop and the editor work with no network
       mix-purifier publish [--organization ORG] [--replace] [--yes] [--no-docs] [--lockfile PATH]
@@ -272,7 +283,7 @@ writeShellApplication {
         built=$MIX_PURIFIER_DEPS
       else
         built=$(nix-build --no-build-output --out-link _build/mix-purifier/deps \
-          --argstr mixLock "$PWD/mix.lock" \
+          --argstr projectDir "$PWD" \
           --argstr lockFile "$lockfile" \
           ${depsExpression})
       fi
@@ -320,12 +331,27 @@ writeShellApplication {
       elixir ${nixLib}/hex-publish.exs "$built/package.tar" "''${publish_args[@]}"
     }
 
+    # Updates the named dependencies, or every one, through Mix's own
+    # `mix deps.update`, then writes mix-purifier.lock.json for the result.
+    update() {
+      if [ $# -eq 0 ]; then
+        echo "mix-purifier: updating every dependency with \`mix deps.update --all\`" >&2
+        mix deps.update --all
+      else
+        echo "mix-purifier: updating $* with \`mix deps.update\`" >&2
+        mix deps.update "$@"
+      fi
+      lock false
+    }
+
     command=''${1-}
     [ $# -gt 0 ] && shift
-    offline=false editor=true docs=true hex_args=()
+    offline=false editor=true docs=true hex_args=() packages=()
     while [ $# -gt 0 ]; do
       case "$command:$1" in
         *:--lockfile) lockfile=$(realpath -m "$2"); shift ;;
+        update:-*) usage >&2; exit 2 ;;
+        update:*) packages+=("$1") ;;
         lock:--offline) offline=true ;;
         prefetch:--no-editor) editor=false ;;
         publish:--no-docs) docs=false ;;
@@ -338,6 +364,7 @@ writeShellApplication {
 
     case "$command" in
       lock) lock "$offline" ;;
+      update) update "''${packages[@]}" ;;
       prefetch) prefetch "$editor" ;;
       publish) publish "$docs" "''${hex_args[@]}" ;;
       -h | --help | help | "") usage ;;

@@ -8,7 +8,8 @@
 # (credo). It then runs the two contract checks the sandbox cannot run:
 # conformance-messages, which reads the message of each failing lockfile,
 # and conformance-rebuild, `nix build --rebuild` of a fixture. `relock` runs
-# the online lock run on every fixture and fails if a lockfile changes.
+# the online lock run on every fixture and fails if a lockfile changes, and
+# conformance-update, which updates a fixture that pins an old version.
 name: check
 
 on:
@@ -46,3 +47,5 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       - name: Relock every fixture online
         run: bash tests/relock-online.sh
+      - name: conformance-update
+        run: bash tests/conformance-update.sh

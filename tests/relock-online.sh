@@ -29,7 +29,7 @@ ERL_LIBS=$hex "$elixir/elixir" -e \
 (cd tests/fixtures/hexrepo && ERL_LIBS=$hex PATH=$elixir:$PATH \
   mix hex.repo add mirror https://repo.hex.pm --public-key "$HEX_HOME/hexpm.pem")
 
-for fixture in basic git umbrella pathdep/app hexrepo publish; do
+for fixture in basic git umbrella pathdep/app hexrepo publish update; do
   echo "relocking $fixture" >&2
   (cd "tests/fixtures/$fixture" && "$cli" lock)
 done

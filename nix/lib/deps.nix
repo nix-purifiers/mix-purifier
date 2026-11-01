@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
-# The deps/ directory of a Mix project, built from its locks: what
-# `mix deps.get` leaves behind, made without the network and without Hex's
-# registry.
+# The deps/ directory of a Mix project, built from the entries of its lock
+# (read-lock.nix): what `mix deps.get` leaves behind, made without the
+# network and without Hex's registry.
 #
 # Each Hex package is unpacked by nix/hex-unpack.exs, which uses Hex's own
 # tarball code and writes Hex's `.hex` marker. Each git dependency is its
@@ -11,8 +11,8 @@
 # asks git when it checks that a git dependency matches mix.lock, so
 # `mix deps` reports every dependency as locked and fetched.
 #
-# buildMixProject passes this directory to nixpkgs' mixRelease, and the
-# `mix-purifier mix` command copies it into a project's deps/.
+# buildMixProject passes this directory to nixpkgs' mixRelease, and
+# `mix-purifier prefetch` copies it into a project's deps/.
 {
   lib,
   runCommand,
@@ -21,18 +21,11 @@
   # turns one download entry into a store path.
   fetchEntry,
 }:
-{
-  # mix.lock.
-  mixLock,
-  # mix-purifier.lock.json, or null for a project that uses hexpm only.
-  lockFile ? null,
-  hexMirror ? "https://repo.hex.pm",
-}:
+# The lock's entries for this system, from lib.purifier.entriesFor.
+entries:
 let
-  downloads = import ./downloads.nix { inherit lib; } {
-    inherit mixLock lockFile hexMirror;
-  };
-  fetch = fetchEntry;
+  hexEntries = lib.filter (entry: entry ? url) entries;
+  gitEntries = lib.filter (entry: entry ? git) entries;
 
   hexPackage =
     entry:
@@ -46,7 +39,7 @@ let
         LANG = "C.UTF-8";
       }
       ''
-        elixir ${../hex-unpack.exs} ${fetch entry} $out \
+        elixir ${../hex-unpack.exs} ${fetchEntry entry} $out \
           ${lib.escapeShellArgs [
             mix.name
             mix.version
@@ -66,7 +59,7 @@ let
       dest = "$out/" + lib.escapeShellArg entry.mix.key;
     in
     ''
-      cp -r ${fetch entry} ${dest}
+      cp -r ${fetchEntry entry} ${dest}
       chmod -R u+w ${dest}
       mkdir -p ${dest}/.git/objects ${dest}/.git/refs
       printf '%s\n' ${lib.escapeShellArg entry.mix.rev} > ${dest}/.git/HEAD
@@ -75,16 +68,13 @@ let
 in
 runCommand "mix-purifier-deps"
   {
-    passthru = {
-      inherit downloads;
-      # Each Hex package, unpacked, by its key in mix.lock.
-      hexPackages = lib.listToAttrs (
-        map (entry: lib.nameValuePair entry.mix.key (hexPackage entry)) downloads.hex
-      );
-    };
+    # Each Hex package, unpacked, by its key in mix.lock.
+    passthru.hexPackages = lib.listToAttrs (
+      map (entry: lib.nameValuePair entry.mix.key (hexPackage entry)) hexEntries
+    );
   }
   ''
     mkdir $out
-    ${lib.concatMapStrings copyHex downloads.hex}
-    ${lib.concatMapStrings copyGit downloads.git}
+    ${lib.concatMapStrings copyHex hexEntries}
+    ${lib.concatMapStrings copyGit gitEntries}
   ''

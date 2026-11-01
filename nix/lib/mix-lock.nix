@@ -14,9 +14,9 @@
 # under deps/. `name` is the Hex package, which names its tarball. `outer`
 # is the SHA-256 of the tarball and `inner` the checksum of its contents.
 #
-# The result is { hex = [ … ]; git = [ … ]; }. Every other entry is an
-# error, so a lock this reader does not understand never builds with a
-# dependency left out.
+# The result is { hex = [ … ]; git = [ … ]; unreadable = [ <line> ]; }.
+# readLock reports each unreadable line as a problem, so a lock this reader
+# does not understand never builds with a dependency left out.
 { lib }:
 lockFile:
 let
@@ -52,11 +52,15 @@ let
         submodules = builtins.match ".*submodules: true.*" (builtins.elemAt git 3) != null;
       }
     else
-      throw "mix-purifier: ${toString lockFile} has an entry it cannot read: ${line}";
+      {
+        kind = "unreadable";
+        inherit line;
+      };
 
   entries = map parse lines;
 in
 {
   hex = lib.filter (entry: entry.kind == "hex") entries;
   git = lib.filter (entry: entry.kind == "git") entries;
+  unreadable = map (entry: entry.line) (lib.filter (entry: entry.kind == "unreadable") entries);
 }

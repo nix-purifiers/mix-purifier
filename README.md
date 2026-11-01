@@ -94,6 +94,14 @@ package tarballs reproducibly, so the tarball Nix builds is the one
 `mix hex.publish` would send. The command sends it with the credentials
 Hex uses for `mix hex.publish`.
 
+`mix-purifier.lib.mix-purifier.readLock { src, lockFile ?, mixLock ?, ...
+}` reads the two locks into the shape every purifier shares:
+`{ purifier, entries, outputs, problems }`. `entries` are the purifier
+library's download entries, `outputs` names each output as `packages`
+does, and `problems` holds a message, naming the fix, for each lockfile
+that is stale, tampered, malformed or incomplete. The builder passes it
+to the library's `checkLock`, and `fetches` is its `entries`.
+
 Every command takes `--lockfile <path>` for a `mix-purifier.lock.json`
 kept outside the project.
 
@@ -113,12 +121,15 @@ _build/mix-purifier/toolchain/bin/mix test
 With `_build/mix-purifier/toolchain/bin` first on `PATH`, such as with
 direnv's `PATH_add`, plain `mix` is that toolchain.
 
-To add or upgrade a dependency, edit `mix.exs`, or change `mix.lock` with
-a Mix that has the network, such as `mix deps.update jason`. Then run the
-lock run and the prefetch again:
+To upgrade dependencies, run `mix-purifier update`, which updates them
+through Mix's own `mix deps.update` (every one, or the ones named) and
+then runs the lock run on the result. `mix-purifier lock` keeps `mix.lock`
+as Mix resolved it, adding only what `mix.exs` asks for and `mix.lock`
+lacks, so after an edit to `mix.exs` the lock run is enough. Run the
+prefetch again after either:
 
 ```zsh
-nix run github:nix-purifiers/mix-purifier -- lock
+nix run github:nix-purifiers/mix-purifier -- update jason
 nix run github:nix-purifiers/mix-purifier -- prefetch
 ```
 

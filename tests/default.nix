@@ -129,15 +129,20 @@ let
     assert lib.assertMsg (!result.success) "${name} evaluated, but it should fail";
     pkgs.runCommand "mix-purifier-test-${name}" { } "touch $out";
 
-  downloadsOf =
-    args:
-    import ../nix/lib/downloads.nix { inherit lib; } (
-      {
-        lockFile = null;
-        hexMirror = "https://repo.hex.pm";
-      }
-      // args
-    );
+  # readLock of a fixture, the basic one unless `src` names another.
+  lockOf = args: mixPurifier.readLock ({ src = ./fixtures/basic; } // args);
+
+  # The lock has problems, each naming `mix-purifier lock`, and checkLock,
+  # which the builder calls, refuses it.
+  refuses =
+    name: lock:
+    assert lib.assertMsg (lock.problems != [ ]) "${name} has no problems, but it should";
+    assert lib.assertMsg (lib.all (lib.hasInfix "mix-purifier lock") lock.problems)
+      "${name} has a problem that does not name `mix-purifier lock`: ${lib.concatStringsSep "; " lock.problems}";
+    assert lib.assertMsg (
+      !(builtins.tryEval (builtins.deepSeq (purifier.checkLock lock) true)).success
+    ) "checkLock accepted ${name}";
+    pkgs.runCommand "mix-purifier-test-${name}" { } "touch $out";
 
   # Two builds of the same release, told apart by a variable no build step
   # reads, give the same files once the second build's store path is
@@ -265,7 +270,7 @@ let
   # A git dependency with `submodules: true` is fetched with its submodules.
   readsSubmodules =
     let
-      downloads = downloadsOf {
+      lock = lockOf {
         mixLock = builtins.toFile "mix.lock" ''
           %{
             "nested": {:git, "https://example.org/nested.git", "0123456789abcdef0123456789abcdef01234567", [branch: "main", submodules: true]},
@@ -281,7 +286,7 @@ let
           };
         };
       };
-      entry = builtins.head downloads.git;
+      entry = builtins.head (lib.filter (entry: entry ? git) lock.entries);
     in
     assert entry.git.submodules;
     assert (purifier.fetchEntry { inherit pkgs; } entry).fetchSubmodules;
@@ -322,43 +327,37 @@ let
         }
         { name = "hexrepo"; }
         { name = "publish"; }
+        { name = "update"; }
       ]
   );
 in
 {
   # The checks of the purifier contract.
-  conformance-stale =
-    fails "conformance-stale"
-      (build {
-        src = ./fixtures/basic;
-        lockFile = hashed "mix-purifier.lock.json" (
-          lib.recursiveUpdate basicLock { outputs.definitionFiles."mix.exs" = lib.fakeSha256; }
-        );
-      }).outputs;
-  conformance-tampered =
-    fails "conformance-tampered"
-      (build {
-        src = ./fixtures/git;
-        lockFile = builtins.toFile "mix-purifier.lock.json" (
-          builtins.toJSON (
-            lib.recursiveUpdate (lib.importJSON ./fixtures/git/mix-purifier.lock.json) {
-              git.decimal.hash = lib.fakeHash;
-            }
-          )
-        );
-      }).fetches;
-  conformance-missing =
-    fails "conformance-missing"
-      (build {
-        src = ./fixtures/git;
-        lockFile = hashed "mix-purifier.lock.json" (removeAttrs gitLock [ "git" ]);
-      }).fetches;
-  conformance-malformed =
-    fails "conformance-malformed"
-      (build {
-        src = ./fixtures/basic;
-        lockFile = builtins.toFile "mix-purifier.lock.json" (builtins.toJSON { outputs = [ ]; });
-      }).outputs;
+  conformance-stale = refuses "conformance-stale" (lockOf {
+    lockFile = hashed "mix-purifier.lock.json" (
+      lib.recursiveUpdate basicLock { outputs.definitionFiles."mix.exs" = lib.fakeSha256; }
+    );
+  });
+  conformance-tampered = refuses "conformance-tampered" (lockOf {
+    src = ./fixtures/git;
+    lockFile = builtins.toFile "mix-purifier.lock.json" (
+      builtins.toJSON (
+        lib.recursiveUpdate (lib.importJSON ./fixtures/git/mix-purifier.lock.json) {
+          git.decimal.hash = lib.fakeHash;
+        }
+      )
+    );
+  });
+  conformance-missing = refuses "conformance-missing" (lockOf {
+    src = ./fixtures/git;
+    lockFile = hashed "mix-purifier.lock.json" (removeAttrs gitLock [ "git" ]);
+  });
+  # A lockfile that is valid JSON but not of this format. A lockfile that is
+  # not valid JSON fails Nix's JSON reader at once, which the CI job
+  # conformance-messages checks.
+  conformance-malformed = refuses "conformance-malformed" (lockOf {
+    lockFile = builtins.toFile "mix-purifier.lock.json" (builtins.toJSON { outputs = [ ]; });
+  });
   conformance-relock = relock.reproduces {
     name = "basic";
     src = ./fixtures/basic;
@@ -403,34 +402,40 @@ in
   hexrepo-deps-accepted = depsAccepted "hexrepo" ./fixtures/hexrepo hexrepo;
   inherit publish command;
 
-  stale-git-lock = fails "stale-git-lock" (downloadsOf {
-    mixLock = ./fixtures/git/mix.lock;
+  stale-git-lock = refuses "stale-git-lock" (lockOf {
+    src = ./fixtures/git;
     lockFile = hashed "mix-purifier.lock.json" (
       lib.recursiveUpdate gitLock {
         git.decimal.rev = "0000000000000000000000000000000000000000";
       }
     );
   });
-  missing-hex-repo = fails "missing-hex-repo" (downloadsOf {
-    mixLock = ./fixtures/hexrepo/mix.lock;
+  missing-hex-repo = refuses "missing-hex-repo" (lockOf {
+    src = ./fixtures/hexrepo;
+    lockFile = hashed "mix-purifier.lock.json" (
+      removeAttrs (committed ./fixtures/hexrepo/mix-purifier.lock.json) [ "hexRepos" ]
+    );
   });
-  missing-outputs =
-    fails "missing-outputs"
-      (build {
-        src = ./fixtures/basic;
-        lockFile = null;
-      }).outputs;
-  future-lock-version = fails "future-lock-version" (downloadsOf {
-    mixLock = ./fixtures/basic/mix.lock;
+  missing-outputs = refuses "missing-outputs" (lockOf {
+    lockFile = null;
+  });
+  future-lock-version = refuses "future-lock-version" (lockOf {
     lockFile = hashed "mix-purifier.lock.json" (basicLock // { version = 999; });
   });
-  unreadable-mix-lock = fails "unreadable-mix-lock" (downloadsOf {
+  unreadable-mix-lock = refuses "unreadable-mix-lock" (lockOf {
     mixLock = builtins.toFile "mix.lock" ''
       %{
         "odd": {:svn, "https://example.org/odd", "1"},
       }
     '';
   });
+  # The builder refuses a lock with problems, through checkLock.
+  builder-refuses =
+    fails "builder-refuses"
+      (build {
+        src = ./fixtures/basic;
+        lockFile = null;
+      }).packages;
   tampered-inner-checksum = tamperedInnerChecksum;
   outputs-known = outputsKnown;
   reads-submodules = readsSubmodules;

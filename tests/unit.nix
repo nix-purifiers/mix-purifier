@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
 # Unit tests of the lock readers: how nix/lib/mix-lock.nix reads mix.lock
-# lines, and how nix/lib/downloads.nix turns them into download entries,
-# with each entry's path and URL. Each test is an evaluation-time
+# lines, and how readLock (nix/lib/read-lock.nix) turns them into download
+# entries, with each entry's path and URL. Each test is an evaluation-time
 # assertion; the check that holds them builds nothing else.
 { pkgs }:
 let
@@ -10,13 +10,25 @@ let
 
   readMixLock =
     text: import ../nix/lib/mix-lock.nix { inherit lib; } (builtins.toFile "mix.lock" text);
+  # The entries of readLock, by kind. These locks record no outputs, which
+  # is a problem of the lock as a whole and leaves its entries readable.
   downloadsOf =
+    args:
+    let
+      lock = readLock args;
+    in
+    {
+      hex = lib.filter (entry: entry ? url) lock.entries;
+      git = lib.filter (entry: entry ? git) lock.entries;
+    };
+  readLock =
     {
       mixLock,
       purifierLock ? null,
       hexMirror ? "https://repo.hex.pm",
     }:
-    import ../nix/lib/downloads.nix { inherit lib; } {
+    import ../nix/lib/read-lock.nix { inherit lib; } {
+      src = ./.;
       mixLock = builtins.toFile "mix.lock" mixLock;
       # With the hash of its content, as `mix-purifier lock` writes it.
       lockFile =
