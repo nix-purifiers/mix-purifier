@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 #
-# Fetches one download entry. A file entry is fetched with fetchurl and a
-# git entry with fetchgit, so the hash of a git entry is the one
-# nix-prefetch-git reports.
+# Fetches one download entry. A file entry is fetched with fetchurl from
+# its URL, then from its mirrors, and a git entry with fetchgit, so the
+# hash of a git entry is the one nix-prefetch-git reports.
 { fetchurl, fetchgit }:
 entry:
 if entry ? url then
   fetchurl {
-    inherit (entry) url hash;
+    urls = [ entry.url ] ++ entry.mirrors;
+    inherit (entry) hash;
     name = baseNameOf entry.path;
   }
 else

@@ -3,8 +3,9 @@
 # The downloads a Mix project's dependencies need, as download entries in
 # the shape of the shared purifier library:
 #
-# - A Hex package is a file entry `{ path, url, hash }`. Its hash is the
-#   outer checksum from mix.lock, which is the SHA-256 of the tarball.
+# - A Hex package is a file entry `{ path, url, mirrors, hash }`. Its hash
+#   is the outer checksum from mix.lock, which is the SHA-256 of the
+#   tarball. Each tarball has one URL, so `mirrors` is empty.
 # - A git dependency is a git entry `{ path, git = { url, rev, submodules },
 #   hash }`. Its hash comes from mix-purifier.lock.json.
 #
@@ -37,6 +38,7 @@ let
   hexDownload = entry: {
     path = "${entry.repo}/${entry.name}-${entry.version}.tar";
     url = "${repoUrl entry}/tarballs/${entry.name}-${entry.version}.tar";
+    mirrors = [ ];
     hash = builtins.convertHash {
       hash = entry.outerChecksum;
       hashAlgo = "sha256";
