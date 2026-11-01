@@ -14,29 +14,36 @@
 {
   lockFile,
   purifierLockFile,
-  # The Hex repository that serves the tarballs. A mirror serves the same
-  # files, so the locked hashes still hold.
+  # The URL that serves hexpm's tarballs. A mirror serves the same files,
+  # so the locked hashes still hold.
   hexMirror,
 }:
 let
   mixLock = import ./mix-lock.nix { inherit lib; } lockFile;
   purifierLock = import ./purifier-lock.nix { inherit lib; } purifierLockFile;
 
-  hexDownload =
+  # A private repository, such as a Hex organization, needs credentials
+  # that never enter Nix: `mix-purifier lock` downloads its tarballs with
+  # Hex and adds each to the store under the path this fetch produces, so
+  # the fetch finds it there.
+  repoUrl =
     entry:
-    if entry.repo != "hexpm" then
-      throw "mix-purifier: ${entry.key} comes from the Hex repository ${entry.repo}. mix-purifier fetches only from hexpm."
+    if entry.repo == "hexpm" then
+      hexMirror
     else
-      {
-        path = "hexpm/${entry.name}-${entry.version}.tar";
-        url = "${hexMirror}/tarballs/${entry.name}-${entry.version}.tar";
-        hash = builtins.convertHash {
-          hash = entry.outerChecksum;
-          hashAlgo = "sha256";
-          toHashFormat = "sri";
-        };
-        mix = entry;
-      };
+      purifierLock.hexRepos.${entry.repo}
+        or (throw "mix-purifier: ${entry.key} comes from the Hex repository ${entry.repo}, but mix-purifier.lock.json has no URL for it. Run `mix-purifier lock`.");
+
+  hexDownload = entry: {
+    path = "${entry.repo}/${entry.name}-${entry.version}.tar";
+    url = "${repoUrl entry}/tarballs/${entry.name}-${entry.version}.tar";
+    hash = builtins.convertHash {
+      hash = entry.outerChecksum;
+      hashAlgo = "sha256";
+      toHashFormat = "sri";
+    };
+    mix = entry;
+  };
 
   gitDownload =
     entry:

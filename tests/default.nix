@@ -23,6 +23,38 @@ let
   # Hex package (jason).
   git = buildMixProject { src = ./fixtures/git; };
 
+  # An umbrella of two applications, one depending on the other with
+  # `in_umbrella`, and a release of both. The root has no application, so
+  # the name is given.
+  umbrella = buildMixProject {
+    src = ./fixtures/umbrella;
+    pname = "umbrella";
+  };
+
+  # A path dependency beside the project (`path: "../helper"`), with a Hex
+  # dependency of its own that the project's mix.lock locks.
+  pathdep = buildMixProject {
+    src = ./fixtures/pathdep;
+    root = "app";
+  };
+
+  # jason from a Hex repository named `mirror` rather than hexpm. The lock
+  # run recorded the repository's URL in mix-purifier.lock.json.
+  hexrepo = buildMixProject { src = ./fixtures/hexrepo; };
+
+  # A package with metadata and ex_doc, for `hexPackage`, `docs` and
+  # publishing.
+  publishable = buildMixProject { src = ./fixtures/publish; };
+
+  beam = {
+    nativeBuildInputs = [
+      pkgs.beamPackages.elixir
+      pkgs.git
+    ];
+    ERL_LIBS = "${pkgs.beamPackages.hex}/lib/erlang/lib";
+    LANG = "C.UTF-8";
+  };
+
   # Runs a release's `eval` and compares what it prints. mixRelease keeps
   # the release cookie out of the store, so the release takes it from
   # RELEASE_COOKIE.
@@ -43,24 +75,64 @@ let
   # and fails if any is missing or does not match.
   depsAccepted =
     name: src: release:
-    pkgs.runCommand "mix-purifier-test-${name}-deps-accepted"
-      {
-        nativeBuildInputs = [
-          pkgs.beamPackages.elixir
-          pkgs.git
-        ];
-        ERL_LIBS = "${pkgs.beamPackages.hex}/lib/erlang/lib";
-        HEX_OFFLINE = 1;
-        LANG = "C.UTF-8";
-      }
+    pkgs.runCommand "mix-purifier-test-${name}-deps-accepted" (beam // { HEX_OFFLINE = 1; }) ''
+      export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
+      cp -r ${src} project
+      chmod -R u+w project
+      cp -r ${release.deps} project/deps
+      chmod -R u+w project/deps
+      cd project
+      mix deps.loadpaths --no-compile
+      touch $out
+    '';
+
+  # The offline interactive mode: `mix-purifier mix` copies the dependency
+  # directory into a copy of the git fixture and compiles it with Hex
+  # offline. A second run copies nothing, because no marker changed.
+  interactive = pkgs.runCommand "mix-purifier-test-interactive" beam ''
+    export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
+    export MIX_PURIFIER_DEPS=${git.deps}
+    cp -r ${./fixtures/git} project
+    chmod -R u+w project
+    cd project
+    ${cli}/bin/mix-purifier mix compile
+    test -f _build/dev/lib/decimal/ebin/decimal.app
+    test -f _build/dev/lib/jason/ebin/jason.app
+    touch deps/jason/marker-of-this-check
+    ${cli}/bin/mix-purifier mix compile
+    test -f deps/jason/marker-of-this-check
+    touch $out
+  '';
+
+  # The publish step: `mix-purifier publish` sends the package tarball and
+  # documentation Nix built to a stand-in for the Hex API, which receives
+  # exactly the tarball buildMixProject's `hexPackage` holds, with the
+  # configured API key, and a docs tarball holding the docs' index.html.
+  publish =
+    pkgs.runCommand "mix-purifier-test-publish"
+      (
+        beam
+        // {
+          nativeBuildInputs = beam.nativeBuildInputs ++ [ pkgs.python3 ];
+          MIX_PURIFIER_HEX_PACKAGE = publishable.hexPackage;
+          MIX_PURIFIER_DOCS = publishable.docs;
+        }
+      )
       ''
         export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
-        cp -r ${src} project
+        mkdir received
+        python3 ${./hex-api.py} received &
+        while [ ! -s received/port ]; do sleep 0.1; done
+        export HEX_API_URL=http://127.0.0.1:$(cat received/port) HEX_API_KEY=mix-purifier-test-key
+        cp -r ${./fixtures/publish} project
         chmod -R u+w project
-        cp -r ${release.deps} project/deps
-        chmod -R u+w project/deps
         cd project
-        mix deps.loadpaths --no-compile
+        ${cli}/bin/mix-purifier publish --yes
+        cd ..
+        cmp received/release.tar ${publishable.hexPackage}/package.tar
+        test "$(cat received/authorization)" = mix-purifier-test-key
+        tar -tzf received/docs.tar.gz | grep -qx index.html
+        tar -tf ${publishable.hexPackage}/package.tar | grep -qx metadata.config
         touch $out
       '';
 
@@ -98,7 +170,6 @@ let
   futureLock = builtins.toFile "mix-purifier.lock.json" (
     builtins.toJSON {
       version = 999;
-      git = { };
     }
   );
   unreadableMixLock = builtins.toFile "mix.lock" ''
@@ -106,29 +177,58 @@ let
       "odd": {:svn, "https://example.org/odd", "1"},
     }
   '';
+  submoduleMixLock = builtins.toFile "mix.lock" ''
+    %{
+      "nested": {:git, "https://example.org/nested.git", "0123456789abcdef0123456789abcdef01234567", [branch: "main", submodules: true]},
+    }
+  '';
+  submoduleLock = builtins.toFile "mix-purifier.lock.json" (
+    builtins.toJSON {
+      version = 1;
+      git.nested = {
+        url = "https://example.org/nested.git";
+        rev = "0123456789abcdef0123456789abcdef01234567";
+        submodules = true;
+        hash = lib.fakeHash;
+      };
+    }
+  );
+
+  # A git dependency with `submodules: true` is fetched with its submodules.
+  readsSubmodules =
+    let
+      downloads = downloadsOf {
+        lockFile = submoduleMixLock;
+        purifierLockFile = submoduleLock;
+      };
+      entry = builtins.head downloads.git;
+    in
+    assert entry.git.submodules;
+    assert (import ../nix/lib/fetch.nix { inherit (pkgs) fetchurl fetchgit; } entry).fetchSubmodules;
+    pkgs.runCommand "mix-purifier-test-reads-submodules" { } "touch $out";
 
   readsMixExs =
     let
       read = import ../nix/lib/mix-project.nix { inherit lib; };
-      basicProject = read ./fixtures/basic/mix.exs;
-      gitProject = read ./fixtures/git/mix.exs;
     in
     assert
-      basicProject == {
+      read ./fixtures/basic/mix.exs == {
         app = "basic";
         version = "0.1.0";
       };
     assert
-      gitProject == {
+      read ./fixtures/git/mix.exs == {
         app = "git_dep";
         version = "0.2.0";
       };
+    assert (read ./fixtures/umbrella/mix.exs).app == null;
     pkgs.runCommand "mix-purifier-test-reads-mix-exs" { } "touch $out";
 
-  # The command runs, and its usage names both subcommands.
+  # The command runs, and its usage names every subcommand.
   command = pkgs.runCommand "mix-purifier-test-command" { } ''
-    ${cli}/bin/mix-purifier --help | grep -q 'mix-purifier mix <args>'
-    ${cli}/bin/mix-purifier --help | grep -q 'mix-purifier lock'
+    for subcommand in 'mix <args>' lock publish; do
+      ${cli}/bin/mix-purifier --help | grep -q "mix-purifier $subcommand"
+    done
     touch $out
   '';
 in
@@ -141,12 +241,28 @@ in
     runs "git" git ''IO.puts(GitDep.sum_json(Decimal.new("1.5"), Decimal.new("2.25")))''
       ''{"sum":"3.75"}'';
   git-deps-accepted = depsAccepted "git" ./fixtures/git git;
+  umbrella-release = umbrella;
+  umbrella-runs =
+    runs "umbrella" umbrella ''IO.puts(Shouter.shout("nix"))''
+      ''{"GREETING":"HELLO, NIX"}'';
+  umbrella-deps-accepted = depsAccepted "umbrella" ./fixtures/umbrella umbrella;
+  pathdep-release = pathdep;
+  pathdep-runs = runs "pathdep" pathdep "IO.puts(PathdepApp.run())" "helped";
+  hexrepo-release = hexrepo;
+  hexrepo-runs =
+    runs "hexrepo" hexrepo ''IO.puts(Hexrepo.encode(%{repo: "mirror"}))''
+      ''{"repo":"mirror"}'';
+  hexrepo-deps-accepted = depsAccepted "hexrepo" ./fixtures/hexrepo hexrepo;
+  inherit interactive publish;
   stale-git-lock = fails "stale-git-lock" (downloadsOf {
     lockFile = ./fixtures/git/mix.lock;
     purifierLockFile = staleGitLock;
   });
   missing-git-lock = fails "missing-git-lock" (downloadsOf {
     lockFile = ./fixtures/git/mix.lock;
+  });
+  missing-hex-repo = fails "missing-hex-repo" (downloadsOf {
+    lockFile = ./fixtures/hexrepo/mix.lock;
   });
   future-lock-version = fails "future-lock-version" (downloadsOf {
     lockFile = ./fixtures/basic/mix.lock;
@@ -155,6 +271,7 @@ in
   unreadable-mix-lock = fails "unreadable-mix-lock" (downloadsOf {
     lockFile = unreadableMixLock;
   });
+  reads-submodules = readsSubmodules;
   reads-mix-exs = readsMixExs;
   inherit command;
 }
