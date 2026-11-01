@@ -15,6 +15,7 @@ root=$PWD
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export HEX_HOME=$work/hex MIX_HOME=$work/mix
+mkdir -p "$HEX_HOME" "$MIX_HOME"
 # The hexrepo fixture's `mirror` serves repo.hex.pm under another name, so
 # its registry records name hexpm.
 export HEX_NO_VERIFY_REPO_ORIGIN=1
