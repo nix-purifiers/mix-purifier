@@ -7,6 +7,8 @@
   # The flake's default package overlay, which adds buildMixProject.
   overlay,
   cli,
+  # The shared purifier library.
+  purifier,
 }:
 let
   # Every fixture builds the way a consumer's package does: through
@@ -14,6 +16,69 @@ let
   withOverlay = pkgs.extend overlay;
   inherit (withOverlay) buildMixProject;
   inherit (pkgs) lib;
+
+  relock = import ./relock.nix { inherit pkgs cli; };
+  credo = import ./real-world/credo.nix {
+    inherit
+      pkgs
+      buildMixProject
+      cli
+      relock
+      ;
+  };
+
+  # The lock run reproduces each fixture's committed lockfile, byte for
+  # byte.
+  relockChecks = lib.listToAttrs (
+    map
+      (
+        {
+          name,
+          root ? ".",
+        }:
+        lib.nameValuePair "${name}-relock" (
+          relock.reproduces {
+            inherit name root;
+            src = ./fixtures + "/${name}";
+            lockFile = ./fixtures + "/${name}/${root}/mix-purifier.lock.json";
+          }
+        )
+      )
+      [
+        { name = "basic"; }
+        { name = "git"; }
+        { name = "umbrella"; }
+        {
+          name = "pathdep";
+          root = "app";
+        }
+        { name = "hexrepo"; }
+        { name = "publish"; }
+      ]
+  );
+
+  # A mix.lock whose inner checksum for jason was edited: the tarball still
+  # matches its outer checksum, so it downloads, and unpacking it fails
+  # with a message that names the checksum mix.lock locks.
+  tamperedInnerChecksum =
+    let
+      tampered = builtins.toFile "mix.lock" (
+        builtins.replaceStrings
+          [ "2e3a008590b0b8d7388c20293e9dcc9cf3e5d642fd2a114e4cbbb52e595d940a" ]
+          [ "0000000000000000000000000000000000000000000000000000000000000000" ]
+          (builtins.readFile ./fixtures/basic/mix.lock)
+      );
+      failure =
+        pkgs.testers.testBuildFailure
+          (buildMixProject {
+            src = ./fixtures/basic;
+            lockFile = tampered;
+          }).deps.hexPackages.jason;
+    in
+    pkgs.runCommand "mix-purifier-test-tampered-inner-checksum" { } ''
+      grep -q 'the inner checksum is 2e3a0085.*but mix.lock locks 00000000' ${failure}/testBuildFailure.log
+      touch $out
+    '';
 
   # Hex packages only: jason, an Elixir package, and telemetry, an Erlang
   # package that rebar3 builds. The project has a release and an escript.
@@ -100,6 +165,25 @@ let
     touch $out
   '';
 
+  # Plain Mix works offline once `mix-purifier mix` has copied the
+  # dependencies into the project, which is what an editor's language
+  # server runs: in a copy of the git fixture, `mix compile` succeeds in
+  # the dev and test environments without HEX_OFFLINE and without the
+  # network.
+  plainMix =
+    pkgs.runCommand "mix-purifier-test-plain-mix" (beam // { MIX_PURIFIER_DEPS = git.deps; })
+      ''
+        export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
+        cp -r ${./fixtures/git} project
+        chmod -R u+w project
+        cd project
+        ${cli}/bin/mix-purifier mix deps
+        mix compile
+        MIX_ENV=test mix compile
+        test -f _build/test/lib/git_dep/ebin/git_dep.app
+        touch $out
+      '';
+
   # The publish step: `mix-purifier publish` sends the package tarball and
   # documentation Nix built to a stand-in for the Hex API, which receives
   # exactly the tarball buildMixProject's `hexPackage` holds, with the
@@ -127,8 +211,10 @@ let
         cd ..
         cmp received/release.tar ${publishable.hexPackage}/package.tar
         test "$(cat received/authorization)" = mix-purifier-test-key
-        tar -tzf received/docs.tar.gz | grep -qx index.html
-        tar -tf ${publishable.hexPackage}/package.tar | grep -qx metadata.config
+        tar -tzf received/docs.tar.gz > docs-files
+        grep -qx index.html docs-files
+        tar -tf ${publishable.hexPackage}/package.tar > package-files
+        grep -qx metadata.config package-files
         touch $out
       '';
 
@@ -200,7 +286,7 @@ let
       entry = builtins.head downloads.git;
     in
     assert entry.git.submodules;
-    assert (import ../nix/lib/fetch.nix { inherit (pkgs) fetchurl fetchgit; } entry).fetchSubmodules;
+    assert (purifier.fetchEntry { inherit pkgs; } entry).fetchSubmodules;
     pkgs.runCommand "mix-purifier-test-reads-submodules" { } "touch $out";
 
   # Nix knows every output by name when it evaluates, from the lock alone:
@@ -309,4 +395,9 @@ in
         purifierLockFile = null;
       }).outputs;
   inherit command;
+  unit = import ./unit.nix { inherit pkgs; };
+  tampered-inner-checksum = tamperedInnerChecksum;
+  plain-mix = plainMix;
 }
+// relockChecks
+// credo.checks

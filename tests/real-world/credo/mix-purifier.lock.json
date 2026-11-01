@@ -1,0 +1,26 @@
+{
+  "outputs": {
+    "app": "credo",
+    "apps": {
+      "credo": {
+        "path": ".",
+        "version": "1.7.19"
+      }
+    },
+    "definitionFiles": {
+      "mix.exs": "0892f70430454e81b5fbc80beaec89e6ee9833bf7d9e16ec34c2816edbf26949"
+    },
+    "escripts": [
+      "credo"
+    ],
+    "package": {
+      "name": "credo",
+      "version": "1.7.19"
+    },
+    "releases": [
+      "credo"
+    ],
+    "version": "1.7.19"
+  },
+  "version": 1
+}

@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
 #
-# Runs the flake's checks on every push to main and on every pull request.
-# The checks build for x86_64-linux, the runner's system, and evaluate for
-# every system the flake supports.
+# Runs the test suite on every push to main and on every pull request.
+#
+# `check` builds every check of the flake on x86_64-linux and on
+# aarch64-linux, each on a runner of its own system: the fixtures, the
+# real-world project (credo), the offline lock run, the language server and
+# the publish step. `relock` runs the online lock run on every fixture and
+# fails if a lockfile changes.
 name: check
 
 on:
@@ -15,7 +19,11 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
@@ -23,3 +31,11 @@ jobs:
         run: nix flake check -L
       - name: Evaluate the checks for every system
         run: nix flake check --all-systems --no-build
+
+  relock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+      - name: Relock every fixture online
+        run: bash tests/relock-online.sh

@@ -13,7 +13,7 @@
 #   }
 #
 # - `outputs` has every output the project produces, as Mix reports it
-#   (nix/project-outputs.exs describes the fields). buildMixProject needs
+#   (nix/lock-info.exs describes the fields). buildMixProject needs
 #   it, and the dependency directory alone does not.
 # - `git` has the NAR hash of each git dependency's checkout. mix.lock pins
 #   the commit but records no hash.

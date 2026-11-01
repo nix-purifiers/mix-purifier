@@ -41,8 +41,11 @@
 # another set.
 {
   lib,
+  pkgs,
   beamPackages,
   callPackage,
+  # The shared purifier library (github:nix-purifiers/purifier).
+  purifier,
 }:
 {
   src,
@@ -95,9 +98,15 @@ let
         throw "mix-purifier: ${toString projectDir}/mix.exs sets no version. Give `version` to buildMixProject."
     );
 
-  deps = callPackage ./deps.nix { inherit beamPackages; } {
-    inherit lockFile purifierLockFile hexMirror;
-  };
+  deps =
+    callPackage ./deps.nix
+      {
+        inherit beamPackages;
+        fetchEntry = purifier.fetchEntry { inherit pkgs; };
+      }
+      {
+        inherit lockFile purifierLockFile hexMirror;
+      };
 
   common =
     removeAttrs args [

@@ -15,6 +15,8 @@ in
     final: prev:
     packages final prev
     // {
-      buildMixProject = final.callPackage ../../nix/lib/build-mix-project.nix { };
+      buildMixProject = final.callPackage ../../nix/lib/build-mix-project.nix {
+        inherit (closure-lib) purifier;
+      };
     };
 }

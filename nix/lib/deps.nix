@@ -16,9 +16,10 @@
 {
   lib,
   runCommand,
-  fetchurl,
-  fetchgit,
   beamPackages,
+  # The shared purifier library's fetchEntry, given its package set: it
+  # turns one download entry into a store path.
+  fetchEntry,
 }:
 {
   lockFile,
@@ -29,7 +30,7 @@ let
   downloads = import ./downloads.nix { inherit lib; } {
     inherit lockFile purifierLockFile hexMirror;
   };
-  fetch = import ./fetch.nix { inherit fetchurl fetchgit; };
+  fetch = fetchEntry;
 
   hexPackage =
     entry:
@@ -72,7 +73,13 @@ let
 in
 runCommand "mix-purifier-deps"
   {
-    passthru = { inherit downloads; };
+    passthru = {
+      inherit downloads;
+      # Each Hex package, unpacked, by its key in mix.lock.
+      hexPackages = lib.listToAttrs (
+        map (entry: lib.nameValuePair entry.mix.key (hexPackage entry)) downloads.hex
+      );
+    };
   }
   ''
     mkdir $out
