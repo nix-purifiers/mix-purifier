@@ -112,9 +112,10 @@ pkgs.beam27Packages; }` builds with another set. The same override on
 Every kind of dependency that `mix.lock` can hold builds:
 
 - **hexpm packages**, including Erlang packages that rebar3 builds.
-- **Packages from other Hex repositories**, both private Hex organizations
-  (`organization: "acme"`) and self-hosted repositories that `mix
-  hex.repo add` configures. The lock run asks Hex for each repository's URL
+- **Packages from self-hosted Hex repositories** that `mix hex.repo add`
+  configures. Private Hex organizations (`organization: "acme"`) take the
+  same path, but they are untested (see Limits). The lock run asks Hex for
+  each repository's URL
   and records it. It also downloads each tarball with Hex, using your Hex
   credentials, checks it against `mix.lock`, and adds it to the Nix store
   under the same path a build's fetch produces. The build then finds the
@@ -181,10 +182,11 @@ behind:
   Packages that fetch precompiled NIFs are the common case, such as those
   built on rustler_precompiled. Such a package usually also builds its NIF
   from source when told to, which the sandbox allows.
-- The checks test a self-hosted repository, by serving hexpm's files under
-  another repository name. A private Hex organization goes through the
-  same code, with the repository URL Hex resolves for the organization,
-  but the checks cannot reach a private organization.
+- Private Hex organizations are untested. They go through the same code as
+  self-hosted repositories, with the repository URL that Hex resolves for
+  the organization, and the checks test that code with a self-hosted
+  repository. No test has run against a real organization, because that
+  needs organization credentials.
 - Mix writes `mix.lock` one entry per line, and mix-purifier reads it that
   way. A lock entry it cannot read is an error, so a dependency is never
   left out of a build.
