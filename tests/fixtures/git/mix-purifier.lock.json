@@ -1,0 +1,11 @@
+{
+  "git": {
+    "decimal": {
+      "hash": "sha256-8TnLjgdINoJ+Nl/DVGdXZSFra3SACSC0t2i2vKVuEg8=",
+      "rev": "592d59ac4474933f91cdc3e8e037f137f7e008b0",
+      "submodules": false,
+      "url": "https://github.com/ericmj/decimal.git"
+    }
+  },
+  "version": 1
+}

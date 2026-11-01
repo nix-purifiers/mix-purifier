@@ -1,0 +1,4 @@
+/result*
+/tests/fixtures/*/_build/
+/tests/fixtures/*/deps/
+erl_crash.dump
