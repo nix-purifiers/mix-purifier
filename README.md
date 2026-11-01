@@ -233,8 +233,18 @@ Working through credo changed mix-purifier in these ways:
 - The lock run reads `mix.lock` through Mix itself.
 - `mix-purifier mix` warns when `mix.exs` changed since the lock.
 
-An online lock run of a fixture with a git dependency takes about three
-seconds.
+On credo, the quickstart above works as written, with the published
+flake:
+
+- The first lock run, with an empty Hex home, took 3.8 seconds and wrote
+  the same lockfile the checks hold for credo.
+- `mix-purifier mix compile` built credo and its dependencies offline in
+  17 seconds, and `mix-purifier mix test` passed every test.
+- `mix-purifier mix deps.update jason` moved jason from 1.4.4 to 1.4.5, and
+  the relock after it took 1.4 seconds. The test suite then passed on the
+  new jason.
+- An edit to `mix.exs` without a relock made `mix-purifier mix` warn,
+  naming the file and `mix-purifier lock`.
 
 ## Tests
 
