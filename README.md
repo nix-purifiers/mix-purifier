@@ -5,8 +5,6 @@ Nix-resolved dependencies. Use the normal build and test commands in your
 working tree; building the project itself in the Nix sandbox is an
 optional next step.
 
-It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
-
 `mix.lock` records the SHA-256 of every Hex tarball, so Nix fetches each
 package straight from it. `mix-purifier lock` writes
 `mix-purifier.lock.json` beside it for what `mix.lock` cannot record:
