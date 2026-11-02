@@ -336,8 +336,5 @@ as a non-flake input.
 
 ## Credits
 
-mix-purifier follows the design of
-[sbt-nix-backend](https://github.com/clhodapp/sbt-nix-backend): the tool
-keeps planning the build, a lockfile pins what it downloads, and Nix builds
-from the lockfile in its sandbox. Purifiers were inspired by nixcloud's
+The purifier idea was inspired by nixcloud's
 [cargo (libnix)](https://github.com/nixcloud/cargo).
