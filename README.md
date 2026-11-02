@@ -53,7 +53,10 @@ toolchain alive under `_build/mix-purifier`. The toolchain's `mix` runs
 with Hex offline, so the everyday loop goes through Mix itself:
 
 ```zsh
-nix run github:nix-purifiers/mix-purifier -- prefetch
+nix shell \
+  'github:nix-purifiers/mix-purifier' \
+  'github:nix-purifiers/mix-purifier#toolchain'
+mix-purifier prefetch
 _build/mix-purifier/toolchain/bin/mix compile
 _build/mix-purifier/toolchain/bin/mix test
 ```
@@ -69,8 +72,11 @@ lacks, so after an edit to `mix.exs` the lock run is enough. Run the
 prefetch again after either:
 
 ```zsh
-nix run github:nix-purifiers/mix-purifier -- update jason
-nix run github:nix-purifiers/mix-purifier -- prefetch
+nix shell \
+  'github:nix-purifiers/mix-purifier' \
+  'github:nix-purifiers/mix-purifier#toolchain'
+mix-purifier update jason
+mix-purifier prefetch
 ```
 
 When the toolchain's `mix` fails because it needs a dependency the locks
@@ -301,9 +307,12 @@ Elixir. Clone the release you want, run the lock run in the checkout, and
 build the escript from the same directory:
 
 ```zsh
+nix shell \
+  'github:nix-purifiers/mix-purifier' \
+  'github:nix-purifiers/mix-purifier#toolchain'
 git clone --branch v1.7.19 https://github.com/rrrene/credo
 cd credo
-nix run github:nix-purifiers/mix-purifier -- lock
+mix-purifier lock
 nix build --impure --expr 'let
   purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
   pkgs = import purifier.inputs.nixpkgs {
