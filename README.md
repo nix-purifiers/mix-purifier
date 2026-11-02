@@ -96,7 +96,8 @@ or in another one:
 
 ```nix
 {
-  inputs.mix-purifier.url = "github:nix-purifiers/mix-purifier";
+  inputs.mix-purifier.url =
+    "github:nix-purifiers/mix-purifier";
   inputs.nixpkgs.follows = "mix-purifier/nixpkgs";
 
   outputs =
@@ -110,7 +111,8 @@ or in another one:
     in
     {
       packages.${system}.default =
-        (pkgs.mix-purifier.buildMixProject { src = ./.; })
+        (pkgs.mix-purifier.buildMixProject { src =
+          ./.; })
         .packages.release-my_app;
     };
 }
