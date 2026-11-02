@@ -23,7 +23,8 @@ package straight from it. `mix-purifier lock` writes
 Install the integration into your Nix profile once:
 
 ```sh
-nix profile install 'github:nix-purifiers/mix-purifier' 'github:nix-purifiers/mix-purifier#toolchain'
+nix profile install 'github:nix-purifiers/mix-purifier' \
+  'github:nix-purifiers/mix-purifier#toolchain'
 ```
 
 This installs the purifier CLI. The workflow below prepares the native
@@ -106,7 +107,8 @@ or in another one:
   inputs.mix-purifier.url = "github:nix-purifiers/mix-purifier";
   inputs.nixpkgs.follows = "mix-purifier/nixpkgs";
 
-  outputs = { nixpkgs, mix-purifier, ... }:
+  outputs =
+    { nixpkgs, mix-purifier, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -116,7 +118,8 @@ or in another one:
     in
     {
       packages.${system}.default =
-        (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app;
+        (pkgs.mix-purifier.buildMixProject { src = ./.; })
+        .packages.release-my_app;
     };
 }
 ```
@@ -194,15 +197,15 @@ For an ad hoc build, the builder can also be evaluated directly from the
 project root. Replace the example package name with one from your project:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.release-my_app'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.mix-purifier.buildMixProject { src = ./.; })
+.packages.release-my_app'
 ```
 
 This uses the purifier's pinned nixpkgs, matching the lock command above.
@@ -315,15 +318,15 @@ build the escript from the same directory:
 git clone --branch v1.7.19 https://github.com/rrrene/credo
 cd credo
 nix run github:nix-purifiers/mix-purifier -- lock
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.mix-purifier.buildMixProject { src = ./.; }).packages.escript-credo'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/mix-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.mix-purifier.buildMixProject { src = ./.; })
+.packages.escript-credo'
 ```
 
 `nix build` puts credo at `result/bin/credo`. To package credo without
