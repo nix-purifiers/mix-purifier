@@ -225,6 +225,10 @@ let
         export HOME=$TMPDIR MIX_HOME=$TMPDIR/mix HEX_HOME=$TMPDIR/hex
         mkdir received
         python3 ${./hex-api.py} received &
+        # Darwin builds have no PID namespace, so a server left running
+        # would keep the build's log open after the builder exits.
+        server=$!
+        trap 'kill $server' EXIT
         while [ ! -s received/port ]; do sleep 0.1; done
         export HEX_API_URL=http://127.0.0.1:$(cat received/port) HEX_API_KEY=mix-purifier-test-key
         cp -r ${./fixtures/publish} project
