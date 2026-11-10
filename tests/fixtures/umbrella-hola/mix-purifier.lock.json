@@ -1,0 +1,28 @@
+{
+  "hash": "sha256:34d2fcac3451fc65bfb6f5937dcde0ffe4808367f639a72355e78cb607195a37",
+  "outputs": {
+    "app": null,
+    "apps": {
+      "greeter": {
+        "path": "apps/greeter",
+        "version": "0.3.0"
+      },
+      "shouter": {
+        "path": "apps/shouter",
+        "version": "0.3.0"
+      }
+    },
+    "definitionFiles": {
+      "apps/greeter/mix.exs": "ae02bce6097891c85dd8758249166318d944b420e6eb21c887b95bb1e8b37350",
+      "apps/shouter/mix.exs": "52e133656b1b905b0115527c3247cbb4ad8d6959c4c85aac3678f12ea3d320e3",
+      "mix.exs": "20f08d400f63196852921e60856cf49973d9be24b739927930954a1b7def666d"
+    },
+    "escripts": [],
+    "package": null,
+    "releases": [
+      "umbrella"
+    ],
+    "version": "0.3.0"
+  },
+  "version": 1
+}

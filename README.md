@@ -336,3 +336,46 @@ as a non-flake input.
 
 The purifier idea was inspired by nixcloud's
 [cargo (libnix)](https://github.com/nixcloud/cargo).
+
+## Compiled OTP applications across consumers
+
+Select application roots from a locked native Mix release:
+
+```nix
+project = pkgs.mix-purifier.buildMixProject {
+  src = ./.;
+  otpApplications.umbrella = [ "shouter" ];
+};
+```
+
+`project.packages.otp-umbrella` contains the release's compiled non-SDK
+application set and `catalog.json`. `project.projections.umbrella` exposes
+`otp`, `resources`, `web`, and `java-resources`. The `otp` value provides
+`applicationRoot` for `ERL_LIBS`, the matching Erlang `runtime`, `elixir`,
+and `catalog`. Extract web or Java resource files before loading them in
+a VM. Erlang callers of Elixir applications must also put the returned
+Elixir SDK applications on the code path.
+
+Native release and application descriptors determine the closure. This
+includes genuinely compiled dependencies, rather than unpacked dependency
+sources. Erlang and Elixir SDK applications stay in the original SDKs.
+The release's native code MD5 and all runtime BEAM chunks must match their
+SDK counterparts; native Mix stripping may remove compiler/debug/checker
+metadata. Mix also reserializes application descriptors, which are compared
+as native Erlang terms. Raw SDK file byte equality is not claimed where
+those native transformations occur.
+
+The initial projection requires native Linux with OTP 27 or later. It
+rejects incompatible ERTS, altered SDK code, duplicate module owners,
+Erlang or Elixir SDK module shadows, missing application dependencies, and
+non-SDK native binaries or NIF payloads. Such payloads require separate
+runtime proof. With no `otpApplications`, existing builder outputs keep
+their behavior.
+
+Checks compile two real source revisions and start the actual applications
+in fresh Erlang and Elixir VMs, using native, HTTP-served, and JAR-carried
+files. Every selected module has its loaded origin, SHA256, and native
+code MD5 checked. Java resources are loaded by an isolated class loader.
+Actual missing dependencies, genuinely compiled replacement modules,
+SDK incompatibility, both SDK module shadow types, duplicate ownership,
+and native payloads have separate negative controls.

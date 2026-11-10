@@ -403,7 +403,15 @@ let
       ]
   );
 in
-{
+lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  fixture-otp-applications =
+    (build {
+      src = ./fixtures/umbrella;
+      otpApplications.umbrella = [ "shouter" ];
+    }).packages.otp-umbrella;
+  fixture-otp-consumers = import ./otp-projections.nix { pkgs = withOverlay; };
+}
+// {
   # The checks of the purifier contract.
   conformance-stale = refuses "conformance-stale" (lockOf {
     lockFile = hashed "mix-purifier.lock.json" (

@@ -88,6 +88,7 @@
   mixLock ? src + "/${root}/mix.lock",
   hexMirror ? "https://repo.hex.pm",
   docsMixEnv ? "dev",
+  otpApplications ? { },
   ...
 }@args:
 let
@@ -150,6 +151,7 @@ let
       "mixLock"
       "hexMirror"
       "docsMixEnv"
+      "otpApplications"
     ]
     // {
       inherit src version;
@@ -219,11 +221,39 @@ let
     '';
   };
 
+  otp = lib.mapAttrs (
+    release: roots:
+    callPackage ./otp-projections.nix
+      {
+        inherit
+          lib
+          stdenv
+          runCommand
+          python3
+          writeText
+          purifier
+          ;
+      }
+      {
+        producer = releases.${release};
+        inherit release roots;
+        inherit (beamPackages) erlang elixir;
+        ownApplications = lib.attrNames outputs.apps;
+      }
+  ) otpApplications;
+
   prefixed = prefix: lib.mapAttrs' (key: value: lib.nameValuePair "${prefix}-${key}" value);
 in
+assert lib.assertMsg (
+  builtins.isAttrs otpApplications
+  && builtins.all (name: builtins.elem name outputs.releases) (builtins.attrNames otpApplications)
+) "mix-purifier: otpApplications keys must name locked releases";
+assert builtins.all (value: value.validated) (builtins.attrValues otp);
 {
+  projections = lib.mapAttrs (_: value: value.projections) otp;
   packages =
-    prefixed "release" releases
+    prefixed "otp" (lib.mapAttrs (_: value: value.package) otp)
+    // prefixed "release" releases
     // prefixed "escript" escripts
     // prefixed "app" (lib.mapAttrs (app: _: "${compiled}/${app}") outputs.apps)
     // {
