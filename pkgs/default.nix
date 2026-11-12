@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 { callPackage, lib, ... }:
 let
-  version = builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ../version.txt);
+  version = import ./version.nix;
   toolchain = callPackage ./toolchain { };
 in
 {
