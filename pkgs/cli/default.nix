@@ -8,7 +8,7 @@
 #
 # - `mix-purifier lock` runs `mix deps.get`, which brings mix.lock up to
 #   date with mix.exs, then writes mix-purifier.lock.json: the project's
-#   outputs as Mix reports them (nix/lock-info.exs), the hash of each git
+#   outputs as Mix reports them (pkgs/cli/lock-info.exs), the hash of each git
 #   dependency's checkout, the URL of each Hex repository other than hexpm,
 #   and the hash of its own content. It downloads the tarballs of those
 #   repositories with Hex and adds them to the Nix store, so a build needs
@@ -19,7 +19,7 @@
 #   the result. `lock` keeps mix.lock as Mix resolved it, adding only what
 #   mix.exs asks for and mix.lock lacks.
 # - `mix-purifier prefetch` builds the project's deps/ directory from the
-#   locks (nix/lib/deps.nix), copies each dependency that changed into
+#   locks (pkgs/build-mix-project/deps.nix), copies each dependency that changed into
 #   ./deps, and keeps it and the toolchain (pkgs/toolchain) alive with
 #   garbage-collector roots under _build/mix-purifier. It also starts the
 #   toolchain's language server once, so it fetches its own files. After
@@ -28,7 +28,7 @@
 #   as buildMixProject's `deps`, to copy instead.
 # - `mix-purifier publish` builds the package tarball and documentation with
 #   Nix (buildMixProject's `release` and `packages.docs`) and publishes them
-#   with Hex (nix/hex-publish.exs). MIX_PURIFIER_RELEASE and
+#   with Hex (pkgs/cli/hex-publish.exs). MIX_PURIFIER_RELEASE and
 #   MIX_PURIFIER_DOCS name ones Nix already built.
 #
 # Each command checks the lockfile first, and fails with a message that
@@ -50,7 +50,7 @@
   version,
 }:
 let
-  nixLib = ../../nix;
+  nixLib = ./.;
   importNixpkgs = "import ${path} { config = { }; overlays = [ ]; }";
   # This flake's own `lib`, which holds the library of each project the
   # flake lists, the purifier library among them. The flake and its locked
@@ -70,7 +70,7 @@ let
         lockFile = /. + lockFile;
       };
     in
-    pkgs.callPackage ${nixLib}/lib/deps.nix { fetchEntry = lib.purifier.fetchEntry { inherit pkgs; }; } (
+    pkgs.callPackage ${../..}/pkgs/build-mix-project/deps.nix { fetchEntry = lib.purifier.fetchEntry { inherit pkgs; }; } (
       lib.purifier.entriesFor pkgs.stdenv.hostPlatform.system lock
     )
   '';

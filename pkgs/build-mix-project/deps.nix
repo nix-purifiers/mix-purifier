@@ -4,7 +4,7 @@
 # (read-lock.nix): what `mix deps.get` leaves behind, made without the
 # network and without Hex's registry.
 #
-# Each Hex package is unpacked by nix/hex-unpack.exs, which uses Hex's own
+# Each Hex package is unpacked by pkgs/build-mix-project/hex-unpack.exs, which uses Hex's own
 # tarball code and writes Hex's `.hex` marker. Each git dependency is its
 # checkout with a minimal `.git` directory: a `HEAD` naming the locked
 # commit and a `config` naming the origin. Those are the two things Mix
@@ -39,7 +39,7 @@ let
         LANG = "C.UTF-8";
       }
       ''
-        elixir ${../hex-unpack.exs} ${fetchEntry entry} $out \
+        elixir ${./hex-unpack.exs} ${fetchEntry entry} $out \
           ${lib.escapeShellArgs [
             mix.name
             mix.version

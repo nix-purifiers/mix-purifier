@@ -15,7 +15,7 @@
 # credentials.
 #
 # Usage: elixir hex-lock.exs ENTRIES_JSON DIR
-# ENTRIES_JSON is the list of Hex entries of mix.lock that nix/lib/mix-lock.nix
+# ENTRIES_JSON is the list of Hex entries of mix.lock that lib-overlays/default/mix-lock.nix
 # reads. Hex itself must be on the code path (ERL_LIBS).
 
 [entries_json, dir] = System.argv()
