@@ -95,7 +95,7 @@ let
   projectDir = src + "/${root}";
   # The lock in memory of the purifier contract. checkLock fails evaluation
   # with its problems, each naming `mix-purifier lock`.
-  lock = import ./read-lock.nix { inherit lib; } {
+  lock = import ../../lib-overlays/default/read-lock.nix { inherit lib; } {
     inherit
       src
       root

@@ -267,7 +267,7 @@ Every kind of dependency that `mix.lock` can hold builds:
 
 - **hexpm packages**, including Erlang packages that rebar3 builds. Each is
   fetched by the URL and SHA-256 in `mix.lock`, then unpacked by Hex's own
-  tarball code (`nix/hex-unpack.exs`), which checks both of its checksums
+  tarball code (`pkgs/build-mix-project/hex-unpack.exs`), which checks both of its checksums
   against `mix.lock` and writes the `.hex` file that Mix checks.
 - **Packages from self-hosted Hex repositories** that `mix hex.repo add`
   configures. The lock run asks Hex for each repository's URL and records

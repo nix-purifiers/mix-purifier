@@ -10,7 +10,7 @@ let
   roots = [ "shouter" ];
   selection =
     producer: runtime:
-    pkgs.mix-purifier.callPackage ../nix/lib/otp-projections.nix { inherit purifier; } {
+    pkgs.mix-purifier.callPackage ../pkgs/build-mix-project/otp-projections.nix { inherit purifier; } {
       inherit producer roots elixir;
       release = "umbrella";
       ownApplications = [

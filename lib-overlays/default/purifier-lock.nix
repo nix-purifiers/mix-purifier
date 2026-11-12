@@ -17,7 +17,7 @@
 #   sorted keys, which is the form `builtins.toJSON` writes. A file edited
 #   by hand has a different hash from the one it records.
 # - `outputs` has every output the project produces, as Mix reports it
-#   (nix/lock-info.exs describes the fields).
+#   (pkgs/cli/lock-info.exs describes the fields).
 # - `git` has the NAR hash of each git dependency's checkout. mix.lock pins
 #   the commit but records no hash.
 # - `hexRepos` has the URL of each Hex repository other than hexpm, as Hex

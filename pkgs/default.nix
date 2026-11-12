@@ -5,8 +5,8 @@ let
   toolchain = callPackage ./toolchain { };
 in
 {
-  # The builder of the purifier contract (nix/lib/build-mix-project.nix).
-  buildMixProject = callPackage ../nix/lib/build-mix-project.nix {
+  # The builder of the purifier contract (pkgs/build-mix-project/default.nix).
+  buildMixProject = callPackage ./build-mix-project {
     inherit (lib) purifier;
   };
   # The toolchain that `mix-purifier prefetch` keeps alive in a project.
